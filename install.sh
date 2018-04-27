@@ -23,24 +23,8 @@ fi
 cd xed
 ./mfile.py install
 
-# Prompt for full installation.
-echo -n "Install headers and static library (y/n)? "
-read answer
-
-if [ "$answer" != "${answer#[Yy]}" ] ;then
-    echo Okay.
-else
-    echo Exiting...
-    exit 0
-fi
-
-# Install headers.
-echo Installing headers...
-sudo cp -r kits/xed-install-base-2018-04-26-lin-x86-64/include/xed /usr/local/include/xed
-
-# Install static library.
-echo Installing static library.
-sudo cp -r kits/xed-install-base-2018-04-26-lin-x86-64/lib/ /usr/local/lib/xed/
-
-# Finished.
+# Provide final instructions.
 echo Done.
+echo Install headers with:    cp -r lib/xed/kits/<install-base-name>/include/xed /usr/local/include/xed
+echo Install static lib with: cp -r lib/xed/kits/<install-base-name>/lib/ /usr/local/lib/
+echo Don't forget to link with -xed when using this library.
