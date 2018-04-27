@@ -1,4 +1,0 @@
-build: off
-
-test_script:
-    - python ci.py

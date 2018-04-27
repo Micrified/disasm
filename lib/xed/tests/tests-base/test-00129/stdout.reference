@@ -1,5 +1,0 @@
-67D6
-ICLASS: SALC   CATEGORY: FLAGOP   EXTENSION: BASE  IFORM: SALC   ISA_SET: I86
-SHORT: addr16 salc 
-Encodable! 67D6
-Identical re-encoding
