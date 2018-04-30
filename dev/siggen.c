@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <assert.h>
 #include <errno.h>
 #include <signal.h>
 #include <sys/mman.h>
@@ -26,6 +27,9 @@ void *page;
 
 // Machine state. Used with decoder.
 xed_state_t machine_state;
+
+// Instruction buffer.
+unsigned char inst_buf[XED_MAX_INSTRUCTION_BYTES];
 
 
 /*
@@ -116,12 +120,32 @@ void handler (int signal, siginfo_t *info, void *ucontext) {
 	// Extract and show length of current instruction.
 	len = getInstructionLength(prgm_counter, &machine_state);
 	printf("\ncurrent instruction:\t%u bytes\n", len);
-	
-	// Extract and show length of next instruction.
-	len = getInstructionLength(prgm_counter + len, &machine_state);
-	printf("next instruction:\t%u bytes\n", len);
 
-	printf("=======================================================\n");
+	// Show current instruction.
+	memcpy(inst_buf, prgm_counter, len);
+	printf("%p:\t", prgm_counter);
+	for (int i = 0; i < len; i++) {
+		printf("%02x ", inst_buf[i]);
+	}
+	printf("\n");
+
+	// Extract and show length of next instruction.
+	void *nextInstruction = prgm_counter + len;
+	len = getInstructionLength(nextInstruction, &machine_state);
+	
+	// Copy next instruction to a buffer.
+	memcpy(inst_buf, nextInstruction, len);
+
+	// Todo: Overwrite next instruction with jump to assembly routine which:
+	// 1. Save all registers.
+	// 2. Call C synchronization routine + restore original instruction.
+	// 3. Restore all registers.
+	printf("next instruction:\t%u bytes\n%p:\t", len, nextInstruction);
+	for (int i = 0; i < len; i++) {
+		printf("%02x ", inst_buf[i]);
+	}
+
+	printf("\n=======================================================\n");
 	
 	// Restore protections.
 	setProtection(info->si_addr, pagesize, WRITE);
