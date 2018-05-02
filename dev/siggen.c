@@ -34,7 +34,7 @@ xed_state_t machine_state;
 unsigned char inst_buf[XED_MAX_INSTRUCTION_BYTES];
 
 // UD2 Instruction Opcodes.
-unsigned char *ud2_opc = "\x0f\x0b";
+unsigned char ud2_opc[2] = {0x0f, 0x0b};
 
 // Pointer to last written address.
 void *lastwrite;
