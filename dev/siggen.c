@@ -2,11 +2,11 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include <assert.h>
 #include <errno.h>
 #include <signal.h>
 #include <sys/mman.h>
 #include <ucontext.h>
+#include <inttypes.h>
 #include "xed/xed-interface.h"
 
 /*
@@ -15,8 +15,10 @@
  *******************************************************************************
 */
 
+#define UD2_SZ				2
 #define READ				PROT_READ
 #define WRITE				PROT_WRITE
+#define EXEC				PROT_EXEC
 #define NONE				PROT_NONE
 
 // Page size.
@@ -30,6 +32,12 @@ xed_state_t machine_state;
 
 // Instruction buffer.
 unsigned char inst_buf[XED_MAX_INSTRUCTION_BYTES];
+
+// UD2 Instruction Opcodes.
+unsigned char *ud2_opc = "\x0f\x0b";
+
+// Pointer to last written address.
+void *lastwrite;
 
 
 /*
@@ -106,49 +114,49 @@ unsigned int getInstructionLength (void *address, xed_state_t *decoderState) {
 */
 
 
-// Signal Handler.
-void handler (int signal, siginfo_t *info, void *ucontext) {
+// Handler: Segmentation fault.
+void handler_sigsegv (int signal, siginfo_t *info, void *ucontext) {
 	ucontext_t *context = (ucontext_t *)ucontext;
 	void *prgm_counter = (void *)context->uc_mcontext.gregs[REG_RIP];
 	unsigned int len;
 
-	// Output context information.
-	printf("==================== Signal Handler ====================\n");
-	printf("si_addr:\t\t%p\n", info->si_addr);
-	printf("program counter:\t%p\n", prgm_counter);
-
-	// Extract and show length of current instruction.
+	// Compute length of current instruction.
 	len = getInstructionLength(prgm_counter, &machine_state);
-	printf("\ncurrent instruction:\t%u bytes\n", len);
 
-	// Show current instruction.
-	memcpy(inst_buf, prgm_counter, len);
-	printf("%p:\t", prgm_counter);
-	for (int i = 0; i < len; i++) {
-		printf("%02x ", inst_buf[i]);
-	}
-	printf("\n");
-
-	// Extract and show length of next instruction.
+	// Determine start of next instruction.
 	void *nextInstruction = prgm_counter + len;
-	len = getInstructionLength(nextInstruction, &machine_state);
-	
-	// Copy next instruction to a buffer.
-	memcpy(inst_buf, nextInstruction, len);
 
-	// Todo: Overwrite next instruction with jump to assembly routine which:
-	// 1. Save all registers.
-	// 2. Call C synchronization routine + restore original instruction.
-	// 3. Restore all registers.
-	printf("next instruction:\t%u bytes\n%p:\t", len, nextInstruction);
-	for (int i = 0; i < len; i++) {
-		printf("%02x ", inst_buf[i]);
-	}
+	// Copy out the necessary bytes for injection of UD2 instruction.
+	memcpy(inst_buf, nextInstruction, UD2_SZ);
 
-	printf("\n=======================================================\n");
+	// Assign write, read, and execute permissions to process text page.
+	size_t offset = (uintptr_t)nextInstruction % (uintptr_t)pagesize;
+	void *pagestart = nextInstruction - offset;
+	setProtection(pagestart, pagesize, READ | WRITE | EXEC);  
+
+	// Replace bytes with UD2 illegal instruction codes.
+	memcpy(nextInstruction, ud2_opc, UD2_SZ); 
+
+	// Set the lastwrite pointer.
+	lastwrite = info->si_addr;
 	
-	// Restore protections.
+	// Lower protections to written address.
 	setProtection(info->si_addr, pagesize, WRITE);
+}
+
+// Handler: Illegal Instruction.
+void handler_sigill (int signal, siginfo_t *info, void *ucontext) {
+	ucontext_t *context = (ucontext_t *)ucontext;
+	void *prgm_counter = (void *)context->uc_mcontext.gregs[REG_RIP];
+
+	// Output written variable
+	printf("You just wrote: %d\n", *((int *)lastwrite));
+	
+	// Restore original instruction.
+	memcpy(prgm_counter, inst_buf, UD2_SZ);
+
+	// Restore protections to written address.
+	setProtection(lastwrite, pagesize, READ);
 }
 
 
@@ -171,8 +179,11 @@ int main (void) {
 	// Set the page size.
 	pagesize = sysconf(_SC_PAGE_SIZE);
 
-	// Set the handler.
-	setAction(SIGSEGV, handler);
+	// Set the SIGSEGV handler.
+	setAction(SIGSEGV, handler_sigsegv);
+
+	// Set the SIGILL handler.
+	setAction(SIGILL, handler_sigill);
 
 	// Allocate memory.
 	if (posix_memalign(&page, pagesize, pagesize) != 0) {
@@ -183,9 +194,17 @@ int main (void) {
 	// Protect the page.
 	setProtection(page, pagesize, READ);
 
-	// Do something bad.
+	// Allow writing to the program text.
+	
+
+	// Tests: Each access should be caught and printed after the write.
 	int *p = (int *)page;
+
 	*p = 0;
+
+	*p = 1;
+
+	*p = 2;
 
 	// Free memory.
 	free(page);
