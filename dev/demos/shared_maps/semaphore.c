@@ -22,7 +22,8 @@
 */
 
 struct sharedObject {
-	sem_t semaphore;	// A semaphore for controlling access to the token.	
+	sem_t sem_a;		// The first child process's semaphore.
+	sem_t sem_b;		// The second child process's semaphore.
 };
 
 /*
@@ -85,8 +86,9 @@ void createObject (const char *name) {
 		panic("Couldn't map object to memory!", strerror(errno));
 	}
 
-	// Initialize semaphore to shared mode with 1 as init value.
-	sem_init(&(shared->semaphore), 1, 1); 
+	// Initialize both semaphores to zero.
+	sem_init(&(shared->sem_a), 1, 0); 
+	sem_init(&(shared->sem_b), 1, 0);
 
 	// Unmap object from memory.
 	if (munmap(shared, OBJ_SIZE) == -1) {
@@ -109,9 +111,16 @@ void pingpong (int child) {
 	
 	for (int i = 0; i < 5; i++) {
 
-		// DOWN: Acquire binary semaphore.
-		if (sem_wait(&(shared->semaphore)) == -1) {
-			panic("Failed to reserve semaphore!", strerror(errno));
+		// DOWN: Acquire personal semaphore.
+		if (child == 0 && (i % 2) == 1) {
+			if (sem_wait(&(shared->sem_a)) == -1) {
+				panic("Couldn't decrement semaphore!", strerror(errno));
+			}
+		}
+		if (child == 1 && (i % 2) == 0) {
+			if (sem_wait(&(shared->sem_b)) == -1) {
+				panic("Couldn't decrement semaphore!", strerror(errno));
+			}
 		}
 
 		// Print.
@@ -121,9 +130,15 @@ void pingpong (int child) {
 			printf("... Pong!\n");
 		}
 
-		// UP: Release binary semaphore.
-		if (sem_post(&(shared->semaphore)) == -1) {
-			panic("Failed to release semaphore!", strerror(errno));
+		// UP: Release counterparts semaphore.
+		if (child == 0) {
+			if (sem_post(&(shared->sem_b)) == -1) {
+				panic("Failed to release semaphore!", strerror(errno));
+			}		
+		} else {
+			if (sem_post(&(shared->sem_a)) == -1) {
+				panic("Failed to release semaphore!", strerror(errno));
+			}
 		}
 
 	}
