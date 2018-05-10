@@ -87,7 +87,7 @@ void createObject (const char *name) {
 	}
 
 	// Initialize both semaphores to zero.
-	sem_init(&(shared->sem_a), 1, 0); 
+	sem_init(&(shared->sem_a), 1, 1); 
 	sem_init(&(shared->sem_b), 1, 0);
 
 	// Unmap object from memory.
@@ -112,12 +112,12 @@ void pingpong (int child) {
 	for (int i = 0; i < 5; i++) {
 
 		// DOWN: Acquire personal semaphore.
-		if (child == 0 && (i % 2) == 1) {
+		if (child == 0) {
 			if (sem_wait(&(shared->sem_a)) == -1) {
 				panic("Couldn't decrement semaphore!", strerror(errno));
 			}
 		}
-		if (child == 1 && (i % 2) == 0) {
+		if (child == 1) {
 			if (sem_wait(&(shared->sem_b)) == -1) {
 				panic("Couldn't decrement semaphore!", strerror(errno));
 			}
