@@ -6,8 +6,15 @@
  *******************************************************************************
 */
 
+
 // [DELETE AFTER] The default nulled fblock structure.
 #define DSM_DEFAULT_FBLOCK		(dsm_fblock){0, 0, NULL}
+
+// Name of barrier semaphore. Suspends processes until initialization complete.
+#define DSM_SEM_BARRIER			"sem_barrier"
+
+// Name of semaphore containing the number of ready processes.
+#define DSM_SEM_NREADY			"sem_nready"
 
 
 /*
@@ -73,6 +80,43 @@ static void up (sem_t *s) {
 	if (sem_post(s) == -1) {
 		panic("Failed to increment semaphore!", strerror(errno));
 	}
+}
+
+// Opens or creates the process nready semaphore. Returns semaphore pointer.
+static sem_t *init_sem_nready (void) {
+	sem_t *sem_nready = NULL;
+
+	// Attempt to create the semaphore. Ignore failure if it exists.
+	if ((sem_nready = sem_open(DSM_SEM_NREADY, O_EXCL|O_CREAT|O_RDWR,
+		S_IRUSR|S_IWUSR, 0)) == SEM_FAILED && errno != EEXIST) {
+		panic("Failed to create nready semaphore!", strerror(errno));
+	}
+
+	// If failed to create semaphore, open it. Exit fatally on error.
+	if ((sem_nready = sem_open(DSM_SEM_NREADY, O_RDWR)) == SEM_FAILED) {
+		panic("Failed to open nready semaphore!", strerror(errno));
+	}
+
+	return sem_nready;
+}
+
+
+// Opens or creates the process barrier semaphore. Returns semaphore pointer.
+static sem_t *init_sem_barrier (void) {
+	sem_t *sem_barrier = NULL;
+	
+	// Attempt to create the semaphore. Ignore failure if it exists.
+	if ((sem_barrier = sem_open(DSM_SEM_BARRIER, O_EXCL|O_CREAT|O_RDWR, 
+		S_IRUSR|S_IWUSR, 0)) == SEM_FAILED && errno != EEXIST) {
+		panic("Failed to create barrier semaphore!", strerror(errno));
+	}
+
+	// If failed to create semaphore, open it. Exit fatally on error.
+	if ((sem_barrier = sem_open(DSM_SEM_BARRIER, O_RDWR)) == SEM_FAILED) {
+		panic("Failed to open barrier semaphore!", strerror(errno));
+	}
+
+	return sem_barrier;
 }
 
 // Locks table access and adds n to user count.
@@ -144,7 +188,7 @@ void dsm_init (const char *name) {
 	struct stat sb;
 	const char *n = (name == NULL ? DSM_DEFAULT_OBJ_NAME : name);
 
-	// Attempt to create an exclusive object first. Ignore error if doesn't exist.
+	// Attempt to create an exclusive object. Ignore error if doesn't exist.
 	if ((fd = shm_open(n, O_CREAT|O_EXCL|O_RDWR, S_IRUSR|S_IWUSR)) != -1) {
 		printf("[%d] Created the shared object!\n", getpid());
 		is_new = 1;
@@ -174,10 +218,28 @@ void dsm_init (const char *name) {
 	// Map object into memory.
 	shared_map = mapSharedObject(fd, size);
 
-	// If new object, setup table and increment users.
+	// Initialize barrier and nready semaphores. Wait if not creator.
+	sem_t *sem_barrier = init_sem_barrier();
+	sem_t *sem_nready = init_sem_nready();
+
+
+	// If new object, setup table. Then release waiting users.
 	if (is_new) {
 		table = init_table(size, (dsm_table *)shared_map);
 		add_users(1);
+		
+		int sval;
+		if (sem_getvalue(sem_nready, &sval) == -1) {
+			panic("Failed to obtain nready value", strerror(errno));
+		}
+		
+		for (int i = 0; i < sval; i++) {
+			down(sem_barrier);
+		}
+	} else {
+
+		// Otherwise wait on the barrier.
+		down(sem_barrier);
 	}
 
 	// Close the file descriptor.
