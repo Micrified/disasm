@@ -1,45 +1,33 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <errno.h>
+#include <sys/wait.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <sys/mman.h>
+#include <semaphore.h>
+
+#include "dsm_util.h"
+#include "dsm_table.h"
 #include "dsm_manager.h"
 
 /*
  *******************************************************************************
- *                              Internal Symbols                               *
+ *                             Symbolic Constants                              *
  *******************************************************************************
 */
 
 
-// [DELETE AFTER] The default nulled fblock structure.
-#define DSM_DEFAULT_FBLOCK		(dsm_fblock){0, 0, NULL}
+#define DSM_MIN_OBJ_SIZE		sysconf(_SC_PAGESIZE)
 
-// Name of barrier semaphore. Suspends processes until initialization complete.
-#define DSM_SEM_BARRIER			"sem_barrier"
+#define DSM_DEF_OBJ_NAME		"dsm_object"
 
-// Name of semaphore containing the number of ready processes.
-#define DSM_SEM_NREADY			"sem_nready"
+#define DSM_SEM_BAR_NAME		"dsm_barrier"
 
-
-/*
- *******************************************************************************
- *                              Type Definitions                               *
- *******************************************************************************
-*/
-
-
-// [DELETE AFTER] Data structure describing a free heap block.
-typedef struct dsm_fblock {
-	size_t 		size;
-	size_t 		offset;
-	struct 		dsm_fblock *next;
-} dsm_fblock;
-
-// Provides all bookkeeping information for shared object. Lives at object base.
-typedef struct dsm_table {
-	dsm_fblock	freelist;			// Linked-list of free heap blocks.
-	size_t 		stack_offset;		// The stack pointer offset.
-	size_t 		break_offset;		// The heap break offset.
-	size_t		object_size;		// The size of the shared object.
-	int			users;				// The number of page users.
-	sem_t 		sem_access;			// The access semaphore.
-} dsm_table;
+#define DSM_SEM_TAL_NAME		"dsm_tally"
 
 
 /*
@@ -49,11 +37,14 @@ typedef struct dsm_table {
 */
 
 
-// The mapped shared object.
-void *shared_map;
+// Pointer to shared object in process memory.
+dsm_table *shared_obj;
 
-// The shared object table pointer. Lives in the mapped object.
-dsm_table *table;
+// Barrier semaphore. Processes wait on this until arbiter releases them.
+sem_t *sem_barrier;
+
+// Tally semaphore.  Processes increment this when they check in.
+sem_t *sem_tally;
 
 
 /*
@@ -62,117 +53,85 @@ dsm_table *table;
  *******************************************************************************
 */
 
-// [DELETE AFTER] Exits with an error message from src.
-void panic (const char *src, const char *msg) {
-	fprintf(stderr, "Fatal [%d]: \"%s\". Reason: \"%s\"\n", getpid(), src, msg);
-	exit(EXIT_FAILURE);
-}
 
-// Attempts to safely decrement a semaphore. Exits fatally on error.
-static void down (sem_t *s) {
-	if (sem_wait(s) == -1) {
-		panic("Failed to decrement semaphore!", strerror(errno));
-	}
-}
+// Opens semaphore or creates with initial value val. Returns semaphore pointer.
+static sem_t *getSem (const char *name, unsigned int val) {
+	sem_t *sp;
 
-// Attempts to safely increment a semaphore. Exits fatally on error.
-static void up (sem_t *s) {
-	if (sem_post(s) == -1) {
-		panic("Failed to increment semaphore!", strerror(errno));
-	}
-}
-
-// Opens or creates the process nready semaphore. Returns semaphore pointer.
-static sem_t *init_sem_nready (void) {
-	sem_t *sem_nready = NULL;
-
-	// Attempt to create the semaphore. Ignore failure if it exists.
-	if ((sem_nready = sem_open(DSM_SEM_NREADY, O_EXCL|O_CREAT|O_RDWR,
-		S_IRUSR|S_IWUSR, 0)) == SEM_FAILED && errno != EEXIST) {
-		panic("Failed to create nready semaphore!", strerror(errno));
+	// Try creating exclusive semaphore. Defer exists error.
+	if ((sp = sem_open(name, O_CREAT|O_EXCL|O_RDWR, S_IRUSR|S_IWUSR, val)) 
+		== SEM_FAILED && errno != EEXIST) {
+		dsm_panic("Couldn't create semaphore!");
 	}
 
-	// If failed to create semaphore, open it. Exit fatally on error.
-	if ((sem_nready = sem_open(DSM_SEM_NREADY, O_RDWR)) == SEM_FAILED) {
-		panic("Failed to open nready semaphore!", strerror(errno));
+	// Try opening existing semaphore. Panic on error.
+	if (sp == SEM_FAILED && (sp = sem_open(name, O_RDWR)) == SEM_FAILED) {
+		dsm_panic("Couldn't open semaphore!");
 	}
 
-	return sem_nready;
+	return sp;
 }
 
-
-// Opens or creates the process barrier semaphore. Returns semaphore pointer.
-static sem_t *init_sem_barrier (void) {
-	sem_t *sem_barrier = NULL;
+// Sets the size of a shared file. Returns size. Panics on error.
+static off_t setSharedFileSize (int fd, off_t size) {
+	if (ftruncate(fd, size) == -1) {
+		dsm_panic("Couldn't resize shared file!");
+	}
 	
-	// Attempt to create the semaphore. Ignore failure if it exists.
-	if ((sem_barrier = sem_open(DSM_SEM_BARRIER, O_EXCL|O_CREAT|O_RDWR, 
-		S_IRUSR|S_IWUSR, 0)) == SEM_FAILED && errno != EEXIST) {
-		panic("Failed to create barrier semaphore!", strerror(errno));
+	return size;
+}
+
+// Gets the size of a shared file. Panics on error.
+static off_t getSharedFileSize (int fd) {
+	struct stat sb;
+	
+	if (fstat(fd, &sb) == -1) {
+		dsm_panic("Couldn't get size of shared file!");
 	}
 
-	// If failed to create semaphore, open it. Exit fatally on error.
-	if ((sem_barrier = sem_open(DSM_SEM_BARRIER, O_RDWR)) == SEM_FAILED) {
-		panic("Failed to open barrier semaphore!", strerror(errno));
+	return sb.st_size;
+}
+
+// Maps shared file with given size and protections to memory. Panics on error.
+static void *mapSharedFile (int fd, size_t size, int prot) {
+	void *p;
+
+	// Let operating system choose starting address.
+	if ((p = mmap(NULL, size, prot, MAP_SHARED, fd, 0)) == MAP_FAILED) {
+		dsm_panic("Couldn't map shared file to memory!");
 	}
 
-	return sem_barrier;
+	return p;
 }
 
-// Locks table access and adds n to user count.
-static void add_users (int n) {
-	down(&(table->sem_access));
-	table->users += n;
-	up(&(table->sem_access));
-}
-
-// [DELETE AFTER] Prints the table to stdout.
-void showTable (dsm_table *tp) {
-	dsm_fblock fb = tp->freelist;
-	printf("------------- Table -------------\n");
-	printf(".freelist = {%zu, %zu, %p}\n", fb.size, fb.offset, fb.next);
-	printf(".stack_offset = %zu\n", tp->stack_offset);
-	printf(".break_offset = %zu\n", tp->break_offset);
-	printf(".object_size = %zu\n", tp->object_size);
-	printf(".users = %d\n", tp->users);
-	printf(".sem_access = ?\n");
-	printf("---------------------------------\n\n");
-}
-
-// Initializes a new table of given size at supplied pointer. Returns pointer.
-dsm_table *init_table (size_t size, dsm_table *tp) {
-
-	// Setup table to default starting values.
-	*tp = (dsm_table) {
-		.freelist 		= DSM_DEFAULT_FBLOCK,	// Default starting block.
-		.stack_offset 	= size,					// Stack grows downwards.
-		.break_offset	= sizeof(dsm_table),	// The break is after table.
-		.object_size	= size,					// The size of shared object.
-		.users			= 1,					// This process is only user.
-		.sem_access		= (sem_t){}				// Uninitialized semaphore.
-	};
-
-	// Initialize semaphore as shared and open.
-	if (sem_init(&(tp->sem_access), 1, 1) == -1) {
-		panic("Couldn't init access semaphore!", strerror(errno));
+// Creates or opens shared file. Sets owner flag and returns file descriptor.
+static int getSharedFile (const char *name, int *owner_p) {
+	int fd, mode = S_IRUSR|S_IWUSR, owner = 0;
+	
+	// Try creating exclusive file. Defer exists error.
+	if ((fd = shm_open(name, O_CREAT|O_EXCL|O_RDWR, mode)) == -1
+		&& errno != EEXIST) {
+		dsm_panic("Couldn't create shared file!");
+	}
+	
+	// Set owner flag.
+	if (fd != -1) {
+		owner = 1;
 	}
 
-	return tp;
-}
-
-// Maps the given file of specified size into memory. Exits fatally on error.
-static void *mapSharedObject (int fd, size_t size) {
-	void *map;
-
-	// Attempt to map shared object into process memory as.
-	if ((map = mmap(NULL, size, PROT_READ|PROT_WRITE, MAP_SHARED, fd, 0))
-		== MAP_FAILED) {
-		panic("Couldn't map object into memory!", strerror(errno));
+	// Try opening existing file. Panic on error.
+	if (!owner && (fd = shm_open(name, O_RDWR, mode)) == -1) {
+		dsm_panic("Couldn't open shared file!");
 	}
 
-	return map;
+	// Set owner pointer.
+	if (owner_p != NULL) {
+		*owner_p = owner;
+	}
+
+	return fd;
 }
- 
+
 
 /*
  *******************************************************************************
@@ -180,135 +139,116 @@ static void *mapSharedObject (int fd, size_t size) {
  *******************************************************************************
 */
 
+/* 
+ * Creates or opens the shared file, maps it to memory, then waits to begin.
+ * This function should be called only once per process. A process that has
+ * invoked this function should never fork.
+ *
+ * nproc: The number of processes expected to use the shared memory. 
+*/
+void dsm_init (unsigned int nproc) {
+	int fd;				// File descriptor of shared file.
+	int arbiter;		// He who creates the shared file becomes arbiter.
+	off_t size = 0;		// The size of the file to be mapped into memory.
 
-// Initializes the shared memory object and table. Exits fatally on error.
-void dsm_init (const char *name) {
-	int is_new = 0, fd = 0;
-	size_t size;
-	struct stat sb;
-	const char *n = (name == NULL ? DSM_DEFAULT_OBJ_NAME : name);
+	// Open or create the barrier semaphore.
+	sem_barrier = getSem(DSM_SEM_BAR_NAME, 0);
 
-	// Attempt to create an exclusive object. Ignore error if doesn't exist.
-	if ((fd = shm_open(n, O_CREAT|O_EXCL|O_RDWR, S_IRUSR|S_IWUSR)) != -1) {
-		printf("[%d] Created the shared object!\n", getpid());
-		is_new = 1;
-	}
+	// Open or create the tally semaphore.
+	sem_tally = getSem(DSM_SEM_TAL_NAME, 0);
 
-	// Attempt to create shared object if it didn't exist. Set new flag.
-	if (fd == -1) {
-		printf("[%d] Opening the shared object!\n", getpid());
-		is_new = 1;
-		if ((fd = shm_open(n,O_RDWR, S_IRUSR|S_IWUSR)) == -1) {
-			panic("Could not open shared object!", strerror(errno));
-		}
-	}
+	// Open or create the shared file.
+	fd = getSharedFile(DSM_DEF_OBJ_NAME, &arbiter);
 
-	// Obtain object size. 
-	if (fstat(fd, &sb) == -1) {
-		panic("fstat failed!", strerror(errno));
+	// If shared-file creator, set size. Else get size.
+	if (arbiter) {
+		size = setSharedFileSize(fd, DSM_MIN_OBJ_SIZE);
 	} else {
-		size = MAX(sb.st_size, DSM_MIN_OBJ_SIZE);
+		size = getSharedFileSize(fd);
 	}
 
-	// Resize object if necessary.
-	if (ftruncate(fd, size) == -1) {
-		panic("Failed to resize object!", strerror(errno));
-	}
+	// Map shared file into memory. Set the global pointer.
+	shared_obj = (dsm_table *)mapSharedFile(fd, (size_t)size, 
+		PROT_READ|PROT_WRITE);
 
-	// Map object into memory.
-	shared_map = mapSharedObject(fd, size);
-
-	// Initialize barrier and nready semaphores. Wait if not creator.
-	sem_t *sem_barrier = init_sem_barrier();
-	sem_t *sem_nready = init_sem_nready();
-
-
-	// If new object, setup table. Then release waiting users.
-	if (is_new) {
-		table = init_table(size, (dsm_table *)shared_map);
-		add_users(1);
-		
-		int sval;
-		if (sem_getvalue(sem_nready, &sval) == -1) {
-			panic("Failed to obtain nready value", strerror(errno));
-		}
-		
-		for (int i = 0; i < sval; i++) {
-			down(sem_barrier);
+	// If arbiter, install the table, then lower the barrier.
+	if (arbiter) {
+		dsm_initTable(shared_obj, (size_t)size);
+		sleep(3);
+		printf("[%d] (ARBITER) Releasing!\n", getpid());
+		while (--nproc) {
+			dsm_up(sem_barrier);
 		}
 	} else {
-
-		// Otherwise wait on the barrier.
-		down(sem_barrier);
+		printf("[%d] (REGULAR) Waiting...\n", getpid());
+		dsm_down(sem_barrier);
 	}
 
-	// Close the file descriptor.
-	close(fd); 
-}
+	// Increment the tally semaphore.
+	dsm_up(sem_tally);
 
-// Unmaps shared object from memory. Destroys if only owner.
-void dsm_destroy (const char *name) {
-	const char *n = (name == NULL ? DSM_DEFAULT_OBJ_NAME : name);
- 
-	// Verify arguments.
-	if (table == NULL || shared_map == NULL) {
-		panic("Cannot destroy NULL object!", "map or object is NULL");
-	}
+	// If last to check in, unlink shared object and semaphore.
+	if (dsm_getSemValue(sem_tally) == nproc) {
 
-	// Unmap memory manually.
-	if (munmap(shared_map, table->object_size) == -1) {
-		panic("Couldn't unmap shared object!", strerror(errno));
-	} else {
-		shared_map = table = NULL;
-	}
-
-	// Destroy if only object owner.
-	if (table->users <= 1) {
-		printf("[%d] I'm destroying the object!\n", getpid());
-		if (shm_unlink(n) == -1) {
-			panic("Couldn't destroy shared object!", strerror(errno));
+		// Unlink the barrier semaphore (do not destroy).
+		if (sem_unlink(DSM_SEM_BAR_NAME) == -1) {
+			dsm_panic("Couldn't unlink barrier semaphore!");
 		}
+	
+		// Unlink the tally semaphore (do not destroy).
+		if (sem_unlink(DSM_SEM_TAL_NAME) == -1) {
+			dsm_panic("Couldn't unlink tally semaphore!");
+		}
+
+		// Unlink the shared object.
+		if (shm_unlink(DSM_DEF_OBJ_NAME) == -1) {
+			dsm_panic("Couldn't unlink shared object!");
+		}
+
 	}
 	
+	// Close shared file descriptor.
+	close(fd);
 }
+
 
 /*
  *******************************************************************************
- *                                    Main                                     *
+ *                              Testing Functions                              *
  *******************************************************************************
 */
 
-void child_program (void) {
+// The program each fork runs. Exits when completed.
+void childProgram (int nproc) {
 
-	dsm_init(NULL);
+	// Run the initializer.
+	dsm_init(nproc);
 
-	down(&(table->sem_access));
-	printf("[%d] Table\n", getpid());
-	showTable(table);
-	up(&(table->sem_access));
+	// Print the table.
+	dsm_showTable(shared_obj);
 
-	sleep(1);
-	
-	dsm_destroy(NULL);
+	// Print that you're done.
+	printf("[%d] Done!\n", getpid());
 
 	exit(EXIT_SUCCESS);
 }
 
-int main (void) {
 
-	// Launch children.
-	for (int i = 0; i < 3; i++) {
+// Main just forks some children. Then it waits for them to die.
+int main (void) {
+	int children = 3;	// The number of forks to perform.
+
+	// Fork away!
+	for (int i = 0; i < children; i++) {
 		if (fork() == 0) {
-			child_program();
+			childProgram(children);
 		}
 	}
 
-	// Wait for children to terminate.
-	for (int i = 0; i < 3; i++) {
+	// Wait on children.
+	for (int i = 0; i < children; i++) {
 		wait(NULL);
 	}
 
-	return 0;
-
+	return EXIT_SUCCESS;
 }
-
