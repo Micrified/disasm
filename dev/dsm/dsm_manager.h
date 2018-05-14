@@ -18,7 +18,7 @@
  * 5. Forces last process checking in to destroy shared data.
  * 6. Initializes and moves processes to a new process group.
  * 7. Allocates a private read-only copy of the shared object.
- * 8. Installs SIGSEGV and SIGILL sychronization handlers.
+ * 8. Installs SIGSEGV, SIGILL, and SIGCONT sychronization handlers.
  *
  * BEHAVIOR: The initializer should be called once per process. Forks of 
  * a process that has invoked the initializer SHOULD be safe to use.

@@ -211,4 +211,11 @@ void dsm_sync_sigcont (int signal, siginfo_t *info, void *ucontext) {
 	// Copy shared page to private.
 	updatePrivateObject();
 
+	printf("[%d] [%d] Updated!\n", getpid(), getpgid(0));
+
+}
+
+// [DEBUG] Handler: Prints on SIGTSTP.
+void dsm_sync_sigtstp (int signal, siginfo_t *info, void *ucontext) {
+	printf("[%d] [%d] Paused!\n", getpid(), getpgid(0));
 }

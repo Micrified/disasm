@@ -260,6 +260,7 @@ void dsm_init (unsigned int nproc) {
 	dsm_sigaction(SIGSEGV, dsm_sync_sigsegv);
 	dsm_sigaction(SIGILL, dsm_sync_sigill);
 	dsm_sigaction(SIGCONT, dsm_sync_sigcont);
+	dsm_sigaction(SIGTSTP, dsm_sync_sigcont);
 
 	// Close shared file descriptor.
 	close(fd);
@@ -290,6 +291,7 @@ void dsm_exit (void) {
 	dsm_sigdefault(SIGSEGV);
 	dsm_sigdefault(SIGILL);
 	dsm_sigdefault(SIGCONT);
+	dsm_sigdefault(SIGTSTP);
 }
 
 

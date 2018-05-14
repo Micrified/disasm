@@ -37,5 +37,7 @@ void dsm_sync_sigill (int signal, siginfo_t *info, void *ucontext);
 // Handler: Sychronization action for SIGCONT.
 void dsm_sync_sigcont (int signal, siginfo_t *info, void *ucontext);
 
+// [DEBUG] Handler: Prints on SIGTSTP.
+void dsm_sync_sigtstp (int signal, siginfo_t *info, void *ucontext);
 
 #endif
