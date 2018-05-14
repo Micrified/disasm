@@ -23,7 +23,7 @@
 */
 
 
-#define DSM_MIN_OBJ_SIZE		sysconf(_SC_PAGESIZE)
+#define DSM_MIN_OBJ_SIZE		(2 * PAGESIZE)
 
 #define DSM_DEF_OBJ_NAME		"dsm_object"
 
@@ -41,9 +41,6 @@
 
 // Pointer to shared object in process memory.
 dsm_table *shared_obj;
-
-// Pointer to private object in process memory.
-dsm_table *private_obj;
 
 // Barrier semaphore. Processes wait on this until arbiter releases them.
 sem_t *sem_barrier;
@@ -194,7 +191,7 @@ static void setPGID (int arbiter) {
 */
 void dsm_init (unsigned int nproc) {
 	int fd;				// File descriptor of shared file.
-	int arbiter;		// He who creates the shared file becomes arbiter.
+	int arbiter = 0;	// He who creates the shared file becomes arbiter.
 	off_t size = 0;		// The size of the file to be mapped into memory.
 
 	// Open or create the barrier semaphore.
@@ -225,15 +222,19 @@ void dsm_init (unsigned int nproc) {
 		
 		// Initialize the table, then lock it down to sync pgid after.
 		dsm_initTable(shared_obj, (size_t)size);
-		
 		dsm_down(&(shared_obj->sem_lock));
 
-		printf("[%d] [%d] (ARBITER) Releasing!\n", getpid(), getpgid(0));
+		// Protect the data page in the shared object.
+		void *data = (void *)shared_obj + shared_obj->data_off;
+		dsm_mprotect(data, PAGESIZE, PROT_READ);
+
+		//printf("[%d] [%d] (ARBITER) Releasing!\n", getpid(), getpgid(0));
+
 		for (int i = nproc; i > 1; i--) {
 			dsm_up(sem_barrier);
 		}
 	} else {
-		printf("[%d] [%d] (REGULAR) Waiting...\n", getpid(), getpgid(0));
+		//printf("[%d] [%d] (REGULAR) Waiting...\n", getpid(), getpgid(0));
 		dsm_down(sem_barrier);
 	}
 
@@ -241,17 +242,12 @@ void dsm_init (unsigned int nproc) {
 	dsm_up(sem_tally);
 	
 	// If last to check in, unlink shared object and semaphore.
-	if (dsm_getSemValue(sem_tally) == nproc) {
+	if (dsm_getSemValue(sem_tally) >= nproc) {
 		destroySharedData();
 	}
 
 	// Set PGID. If arbiter, release table lock.
 	setPGID(arbiter);
-
-	// Allocate private object, copy shared into it, then read protect it.
-	private_obj = (dsm_table *)dsm_pageAlloc(private_obj, size);
-	memcpy(private_obj, shared_obj, size);
-	dsm_mprotect(private_obj, size, PROT_READ);
 
 	// Initialize sychronization data structures.
 	dsm_sync_init();
@@ -260,7 +256,7 @@ void dsm_init (unsigned int nproc) {
 	dsm_sigaction(SIGSEGV, dsm_sync_sigsegv);
 	dsm_sigaction(SIGILL, dsm_sync_sigill);
 	dsm_sigaction(SIGCONT, dsm_sync_sigcont);
-	dsm_sigaction(SIGTSTP, dsm_sync_sigcont);
+	dsm_sigaction(SIGTSTP, dsm_sync_sigtstp);
 
 	// Close shared file descriptor.
 	close(fd);
@@ -271,11 +267,6 @@ void dsm_init (unsigned int nproc) {
  * and changes the process to it's own group.
 */
 void dsm_exit (void) {
-
-	// Deallocate private page.
-	if (private_obj != NULL) {
-		free(private_obj);
-	}
 
 	// Unmap shared object.
 	if (shared_obj != NULL && munmap(shared_obj, shared_obj->obj_size) == -1) {
@@ -302,16 +293,26 @@ void dsm_exit (void) {
 */
 
 // The program each fork runs. Exits when completed.
-void childProgram (int nproc) {
+void childProgram (int nproc, int whoami) {
 
 	// Run the initializer.
 	dsm_init(nproc);
 
-	// Acquire a table address to write to.
-	int *x = (int *)(private_obj + DSM_TAB_SIZE);
+	// Acquire a shared pointer.
+	int *x = (int *)((void *)shared_obj + shared_obj->data_off);
 
-	// Increment it.
-	(*x)++;
+	for (int i = 0; i < 5; i++) {
+
+		while (*x != whoami);
+
+		if (whoami == 0) {
+			printf("Ping! ...\n");
+		} else {
+			printf("... Pong!\n");
+		}
+
+		*x = (1 - *x);
+	}
 
 	// Print that you're done.
 	printf("[%d] [%d] Done (x = %d)!\n", getpid(), getpgid(0), *x);
@@ -325,13 +326,13 @@ void childProgram (int nproc) {
 
 // Main just forks some children. Then it waits for them to die.
 int main (void) {
-	int children = 3;	// The number of forks to perform.
+	int children = 2;	// The number of forks to perform.
 
 	// Fork away!
 	printf("[%d] [%d] Master: Go!\n", getpid(), getpgid(0));
 	for (int i = 0; i < children; i++) {
 		if (fork() == 0) {
-			childProgram(children);
+			childProgram(children, i);
 		}
 	}
 

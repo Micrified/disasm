@@ -15,9 +15,6 @@
 // External reference to the shared object. dsm_manager.c:42
 extern dsm_table *shared_obj;
 
-// External reference to the private object: dsm_manager.c:45
-extern dsm_table *private_obj;
-
 
 /*
  *******************************************************************************
