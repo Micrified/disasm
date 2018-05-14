@@ -12,6 +12,8 @@
 
 #include "dsm_util.h"
 #include "dsm_table.h"
+#include "dsm_signal.h"
+#include "dsm_sync.h"
 #include "dsm_manager.h"
 
 /*
@@ -39,6 +41,9 @@
 
 // Pointer to shared object in process memory.
 dsm_table *shared_obj;
+
+// Pointer to private object in process memory.
+dsm_table *private_obj;
 
 // Barrier semaphore. Processes wait on this until arbiter releases them.
 sem_t *sem_barrier;
@@ -132,12 +137,53 @@ static int getSharedFile (const char *name, int *owner_p) {
 	return fd;
 }
 
+// Unlinks the shared object and shared semaphores.
+static void destroySharedData (void) {
+
+		// Unlink the barrier semaphore (do not destroy).
+		if (sem_unlink(DSM_SEM_BAR_NAME) == -1) {
+			dsm_panic("Couldn't unlink barrier semaphore!");
+		}
+	
+		// Unlink the tally semaphore (do not destroy).
+		if (sem_unlink(DSM_SEM_TAL_NAME) == -1) {
+			dsm_panic("Couldn't unlink tally semaphore!");
+		}
+
+		// Unlink the shared object.
+		if (shm_unlink(DSM_DEF_OBJ_NAME) == -1) {
+			dsm_panic("Couldn't unlink shared object!");
+		}
+}
+
+// Sets the process group ID (pgid). Releases table access if arbiter.
+static void setPGID (int arbiter) {
+
+	// If arbiter, change group ID and release table lock.
+	if (arbiter) {
+		
+		if (setpgid(0, 0) == -1) {
+			dsm_panic("Couldn't establish process group!");
+		}
+
+		dsm_up(&(shared_obj->sem_lock));
+	} else {
+
+		// Set process group to that of the arbiter.
+		if (setpgid(0, dsm_getTablePGID(shared_obj)) == -1) {
+			dsm_panic("Couldn't set process group!");
+		}
+
+	}
+}
+
 
 /*
  *******************************************************************************
  *                         Public Function Definitions                         *
  *******************************************************************************
 */
+
 
 /* 
  * Creates or opens the shared file, maps it to memory, then waits to begin.
@@ -171,44 +217,79 @@ void dsm_init (unsigned int nproc) {
 	shared_obj = (dsm_table *)mapSharedFile(fd, (size_t)size, 
 		PROT_READ|PROT_WRITE);
 
-	// If arbiter, install the table, then lower the barrier.
+	// If arbiter, set group, install the table, then lower the barrier.
 	if (arbiter) {
+
+		// Zero out space before.
+		memset(shared_obj, 0, (size_t)size);
+		
+		// Initialize the table, then lock it down to sync pgid after.
 		dsm_initTable(shared_obj, (size_t)size);
-		sleep(3);
-		printf("[%d] (ARBITER) Releasing!\n", getpid());
-		while (--nproc) {
+		
+		dsm_down(&(shared_obj->sem_lock));
+
+		printf("[%d] [%d] (ARBITER) Releasing!\n", getpid(), getpgid(0));
+		for (int i = nproc; i > 1; i--) {
 			dsm_up(sem_barrier);
 		}
 	} else {
-		printf("[%d] (REGULAR) Waiting...\n", getpid());
+		printf("[%d] [%d] (REGULAR) Waiting...\n", getpid(), getpgid(0));
 		dsm_down(sem_barrier);
 	}
 
 	// Increment the tally semaphore.
 	dsm_up(sem_tally);
-
+	
 	// If last to check in, unlink shared object and semaphore.
 	if (dsm_getSemValue(sem_tally) == nproc) {
-
-		// Unlink the barrier semaphore (do not destroy).
-		if (sem_unlink(DSM_SEM_BAR_NAME) == -1) {
-			dsm_panic("Couldn't unlink barrier semaphore!");
-		}
-	
-		// Unlink the tally semaphore (do not destroy).
-		if (sem_unlink(DSM_SEM_TAL_NAME) == -1) {
-			dsm_panic("Couldn't unlink tally semaphore!");
-		}
-
-		// Unlink the shared object.
-		if (shm_unlink(DSM_DEF_OBJ_NAME) == -1) {
-			dsm_panic("Couldn't unlink shared object!");
-		}
-
+		destroySharedData();
 	}
-	
+
+	// Set PGID. If arbiter, release table lock.
+	setPGID(arbiter);
+
+	// Allocate private object, copy shared into it, then read protect it.
+	private_obj = (dsm_table *)dsm_pageAlloc(private_obj, size);
+	memcpy(private_obj, shared_obj, size);
+	dsm_mprotect(private_obj, size, PROT_READ);
+
+	// Initialize sychronization data structures.
+	dsm_sync_init();
+
+	// Install sychronization signal handlers.
+	dsm_sigaction(SIGSEGV, dsm_sync_sigsegv);
+	dsm_sigaction(SIGILL, dsm_sync_sigill);
+	dsm_sigaction(SIGCONT, dsm_sync_sigcont);
+
 	// Close shared file descriptor.
 	close(fd);
+}
+
+/*
+ * Unmaps the shared file from memory, deallocates the private page,
+ * and changes the process to it's own group.
+*/
+void dsm_exit (void) {
+
+	// Deallocate private page.
+	if (private_obj != NULL) {
+		free(private_obj);
+	}
+
+	// Unmap shared object.
+	if (shared_obj != NULL && munmap(shared_obj, shared_obj->obj_size) == -1) {
+		dsm_panic("Couldn't unmap shared object!");
+	}
+
+	// Exit process group.
+	if (setpgid(0, 0) == -1) {
+		dsm_panic("Couldn't exit process group!");
+	}
+
+	// Reset SIGSEGV and SIGILL handlers to default.
+	dsm_sigdefault(SIGSEGV);
+	dsm_sigdefault(SIGILL);
+	dsm_sigdefault(SIGCONT);
 }
 
 
@@ -224,11 +305,17 @@ void childProgram (int nproc) {
 	// Run the initializer.
 	dsm_init(nproc);
 
-	// Print the table.
-	dsm_showTable(shared_obj);
+	// Acquire a table address to write to.
+	int *x = (int *)(private_obj + DSM_TAB_SIZE);
+
+	// Increment it.
+	(*x)++;
 
 	// Print that you're done.
-	printf("[%d] Done!\n", getpid());
+	printf("[%d] [%d] Done (x = %d)!\n", getpid(), getpgid(0), *x);
+
+	// Run the destructor.
+	dsm_exit();
 
 	exit(EXIT_SUCCESS);
 }
@@ -239,6 +326,7 @@ int main (void) {
 	int children = 3;	// The number of forks to perform.
 
 	// Fork away!
+	printf("[%d] [%d] Master: Go!\n", getpid(), getpgid(0));
 	for (int i = 0; i < children; i++) {
 		if (fork() == 0) {
 			childProgram(children);
@@ -249,6 +337,8 @@ int main (void) {
 	for (int i = 0; i < children; i++) {
 		wait(NULL);
 	}
+
+	printf("[%d [%d] Master: All children have finished!\n", getpid(), getpgid(0));
 
 	return EXIT_SUCCESS;
 }

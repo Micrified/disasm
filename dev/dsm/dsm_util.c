@@ -4,6 +4,7 @@
 #include <unistd.h>
 #include <errno.h>
 #include <semaphore.h>
+#include <sys/mman.h>
 #include "dsm_util.h"
 
 
@@ -46,3 +47,23 @@ int dsm_getSemValue (sem_t *sp) {
 	return v;
 }
 
+// Sets the given protections to a memory page. Exits fatally on error.
+void dsm_mprotect (void *address, size_t size, int flags) {
+
+	// Exit fatally if protection fails.
+	if (mprotect(address, size, flags) == -1) {
+		dsm_panic("Couldn't protect specified page!");
+	}
+
+}
+
+// Allocates a page-aligned slice of memory. Exits fatally on error.
+void *dsm_pageAlloc (void *address, size_t size) {
+	size_t alignment = sysconf(_SC_PAGE_SIZE);
+
+	if (posix_memalign(&address, alignment, size) == -1) {
+		dsm_panic("Couldn't allocate aligned page!");
+	}
+
+	return address;
+}

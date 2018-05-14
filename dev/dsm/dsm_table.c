@@ -29,6 +29,9 @@ void dsm_initTable (dsm_table *tp, size_t obj_size) {
 
 	// Assign data region offset.
 	tp->data_off = DSM_TAB_SIZE;
+
+	// Group PID will become PID of arbiter. Set to arbiter PID now.
+	tp->pgid = getpid();
 }
 
 // [DEBUG] [ATOMIC] Prints a table to standard out.
@@ -46,4 +49,13 @@ void dsm_showTable (dsm_table *tp) {
 	printf("data_off = %zu\n", tp->data_off);
 	printf("========================\n");
 	dsm_up(&(tp->sem_lock));
+}
+
+// [ATOMIC] Returns the table process group id.
+int dsm_getTablePGID (dsm_table *tp) {
+	int pgid = -1;
+	dsm_down(&(tp->sem_lock));
+	pgid = tp->pgid;
+	dsm_up(&(tp->sem_lock));
+	return pgid;
 }

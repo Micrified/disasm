@@ -10,6 +10,7 @@
  *******************************************************************************
 */
 
+
 #define DSM_TAB_SIZE		sizeof(dsm_table)
 
 
@@ -24,6 +25,7 @@ typedef struct dsm_table {
 	sem_t sem_lock;				// Access control semaphore.
 	size_t obj_size;			// Total size of the mapped file.
 	off_t data_off;				// Offset from pointer to data region.
+	int pgid;					// Process group ID.
 } dsm_table;
 
 
@@ -39,6 +41,9 @@ void dsm_initTable (dsm_table *tp, size_t obj_size);
 
 // [DEBUG] [ATOMIC] Prints a table to standard out.
 void dsm_showTable (dsm_table *tp);
+
+// [ATOMIC] Returns the table process group id.
+int dsm_getTablePGID (dsm_table *tp);
 
 
 #endif
