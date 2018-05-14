@@ -79,51 +79,13 @@ static void seizeAccess (void) {
 
 // Releases after write: Unfreezes all processes, then releases lock.
 static void releaseAccess (void) {
+
+	// Release shared object semaphore.
+	dsm_up(&(shared_obj->sem_lock));
 	
 	// Unfreeze all other processes in the group with SIGCONT
 	dsm_killpg(SIGCONT);
 
-	// Release shared object semaphore.
-	dsm_up(&(shared_obj->sem_lock));
-
-}
-
-// Copies shared memory from private_obj with shared_obj to update it.
-static void updateSharedObject (void) {
-
-	// Compute start of destination address.
-	void *dest = shared_obj + shared_obj->data_off;
-
-	// Compute state of origin address.
-	void *src = private_obj + private_obj->data_off;
-
-	// Compute size of free data region.
-	size_t size = shared_obj->obj_size - shared_obj->data_off;
-
-	// Copy over memory.
-	memcpy(dest, src, size);
-}
-
-// Copies shared memory from shared_obj to private_obj to update it.
-static void updatePrivateObject (void) {
-
-	// Set write access to private page.
-	dsm_mprotect(private_obj, PAGESIZE, PROT_WRITE);
-
-	// Compute start of destination address.
-	void *dest = private_obj + private_obj->data_off;
-
-	// Compute start of origin address.
-	void *src = shared_obj + shared_obj->data_off;
-
-	// Compute size of free data region.
-	size_t size = private_obj->obj_size - private_obj->data_off;
-
-	// Copy over memory.
-	memcpy(dest, src, size);
-
-	// Set read-only access to private page.
-	dsm_mprotect(private_obj, PAGESIZE, PROT_READ);
 }
 
 
@@ -144,7 +106,7 @@ void dsm_sync_init (void) {
 	xed_state_init2(&xed_machine_state, XED_MACHINE_MODE_LONG_64,
 		XED_ADDRESS_WIDTH_64b);
 
-	printf("[%d] [%d] Decoder initialized!\n", getpid(), getpgid(0));
+	//printf("[%d] [%d] Decoder initialized!\n", getpid(), getpgid(0));
 
 }
 
@@ -154,7 +116,7 @@ void dsm_sync_sigsegv (int signal, siginfo_t *info, void *ucontext) {
 	void *prgm_counter = (void *)context->uc_mcontext.gregs[REG_RIP];
 	xed_uint_t len;
 
-	printf("[%d] [%d] SIGSEGV!\n", getpid(), getpgid(0));
+	//printf("[%d] [%d] SIGSEGV!\n", getpid(), getpgid(0));
 	
 	// Seize write access to shared memory.
 	seizeAccess();
@@ -179,9 +141,9 @@ void dsm_sync_sigsegv (int signal, siginfo_t *info, void *ucontext) {
 	// [CHANGE] Set fault address.
 	fault_addr = info->si_addr;
 
-	// Allow writing to protected page.
-	dsm_mprotect(private_obj, private_obj->obj_size, PROT_WRITE);
-
+	// Give protected portion of shared page read-write access.
+	void *page = (void *)shared_obj + shared_obj->data_off;
+	dsm_mprotect(page, PAGESIZE, PROT_WRITE);
 }
 
 // Handler: Sychronization action for SIGILL
@@ -189,26 +151,25 @@ void dsm_sync_sigill (int signal, siginfo_t *info, void *ucontext) {
 	ucontext_t *context = (ucontext_t *)ucontext;
 	void *prgm_counter = (void *)context->uc_mcontext.gregs[REG_RIP];
 
-	printf("[%d] [%d] SIGILL!\n", getpid(), getpgid(0));
-
-	// Sychronize shared pages.
-	updateSharedObject();
-
-	// Release object lock and unfreeze other processes.
-	releaseAccess();
+	//printf("[%d] [%d] SIGILL!\n", getpid(), getpgid(0));
 
 	// Restore original instruction.
 	memcpy(prgm_counter, inst_buf, UD2_SZ);
 
-	// Protect private page.
-	dsm_mprotect(private_obj, private_obj->obj_size, PROT_READ);
-	
+	// Give protected portion of shared page read-only access.
+	void *page = (void *)shared_obj + shared_obj->data_off;
+	dsm_mprotect(page, PAGESIZE, PROT_READ);
+
+	// Release object lock and unfreeze other processes.
+	releaseAccess();
 }
 
 // Handler: Sychronization action for SIGCONT.
 void dsm_sync_sigcont (int signal, siginfo_t *info, void *ucontext) {
-	
-	// Copy shared page to private.
-	updatePrivateObject();
+	//printf("[%d] [%d] Resumed!\n", getpid(), getpgid(0));
+}
 
+// [DEBUG] Handler: Prints on SIGTSTP.
+void dsm_sync_sigtstp (int signal, siginfo_t *info, void *ucontext) {
+	//printf("[%d] [%d] Paused!\n", getpid(), getpgid(0));
 }

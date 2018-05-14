@@ -17,8 +17,8 @@
 
 // Exits fatally with given error message. Also outputs errno.
 void dsm_panic (const char *msg) {
-	const char *fmt = "[%d] Fatal Error: \"%s\". Errno: \"%s\"\n";
-	fprintf(stderr, fmt, getpid(), msg, strerror(errno));
+	const char *fmt = "[%d] Fatal Error: \"%s\". Errno (%d): \"%s\"\n";
+	fprintf(stderr, fmt, getpid(), msg, errno, strerror(errno));
 	exit(EXIT_FAILURE);
 }
 

@@ -28,7 +28,7 @@ void dsm_initTable (dsm_table *tp, size_t obj_size) {
 	tp->obj_size = obj_size;
 
 	// Assign data region offset.
-	tp->data_off = DSM_TAB_SIZE;
+	tp->data_off = PAGESIZE;
 
 	// Group PID will become PID of arbiter. Set to arbiter PID now.
 	tp->pgid = getpid();
