@@ -345,3 +345,6 @@ int main (void) {
 
 	return EXIT_SUCCESS;
 }
+
+// Check that no objects are left over by accidental aborts to the program by
+// running "make reset" to remove them!
