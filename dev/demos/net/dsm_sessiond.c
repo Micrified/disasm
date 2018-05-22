@@ -16,8 +16,10 @@
 #include <sys/poll.h>
 
 #include "dsm_sessiond.h"
+#include "dsm_msg.h"
 #include "dsm_htab.h"
-
+#include "dsm_inet.h"
+#include "dsm_util.h"
 
 /*
  *******************************************************************************
@@ -49,70 +51,13 @@ unsigned int npollfds;
 
 /*
  *******************************************************************************
- *                              Utility Functions                              *
+ *                              Polling Functions                              *
  *******************************************************************************
 */
 
 
-// [NON-REENTRANT] Converts given port to a string and returns pointer.
-static const char *portToString (unsigned int port) {
-	static char b[6];	// Max port is 65536 + one for null-char.
-	snprintf(b, 6, "%u", port);
-	return b;
-}
-
-// [REMOVE] Returns a socket bound to the given port.
-static int getBoundSocket (int flags, int family, int socktype, unsigned int port) {
-	struct addrinfo hints, *result, *p;
-	int s, stat, y = 1;
-
-	// Configure hints.
-	memset(&hints, 0, sizeof(hints));
-	hints.ai_flags = flags;
-	hints.ai_family = family;
-	hints.ai_socktype = socktype;
-	
-	printf("[%d] Creating socket to connect to port: \"%s\"\n", getpid(), portToString(port));
-
-	// Lookup available socket.
-	if ((stat = getaddrinfo(NULL, portToString(port), &hints, &result)) != 0) {
-		fprintf(stderr, "Error: getaddrinfo: \"%s\"\n", gai_strerror(stat));
-		exit(EXIT_FAILURE);
-	}
-
-	// Bind to first available result.
-	for (p = result; p != NULL; p = p->ai_next) {
-
-		// Try initializing a socket.
-		if ((s = socket(p->ai_family, p->ai_socktype, p->ai_protocol)) == -1) {
-			fprintf(stderr, "Warning: Bad socket: \"%s\"\n", strerror(errno));
-			continue;
-		}
-
-		// Prepare port for reuse.
-		if (setsockopt(s, SOL_SOCKET, SO_REUSEADDR, &y, sizeof(y)) == -1) {
-			fprintf(stderr, "Error: No port reuse: \"%s\"\n", strerror(errno));
-			exit(EXIT_FAILURE);
-		}
-
-		// Try binding to the socket.
-		if (bind(s, p->ai_addr, p->ai_addrlen) == -1) {
-			fprintf(stderr, "Error: Couldn't bind: \"%s\"\n", strerror(errno));
-			exit(EXIT_FAILURE);
-		}
-		
-		break;
-	}
-
-	// Free linked list.
-	freeaddrinfo(result);
-
-	// Return result.
-	return ((p == NULL) ? -1 : s);
-}
-
 // Adds or updates fd with events to pollable list. Returns nonzero on error.
-int setPollable (int fd, short events) {
+static int setPollable (int fd, short events) {
 	
 	// Search to see if fd exists. Update if it does.
 	for (int i = 0; i < npollfds; i++) {
@@ -138,7 +83,7 @@ int setPollable (int fd, short events) {
 }
 
 // Closes and removes fd from pollable list. Remaining sets are shuffled down.
-void removePollable (int fd) {
+static void removePollable (int fd) {
 	int i, j;
 
 	// Search for target.
@@ -158,7 +103,7 @@ void removePollable (int fd) {
 }
 
 // [DEBUG] Prints the value of all pollable file-descriptors.
-void showPollable (void) {
+static void showPollable (void) {
 	printf("Pollable = [");
 	for (int i = 0; i < npollfds; i++) {
 		printf("%d", pollfds[i].fd);
@@ -170,24 +115,38 @@ void showPollable (void) {
 }
 
 
+/*
+ *******************************************************************************
+ *                              Socket Functions                               *
+ *******************************************************************************
+*/
+
+
 // Accepts incoming connection, and updates the list of pollable descriptors.
-static void acceptConnection (int sock_listen) {
+static void processConnection (int sock_listen) {
 	struct sockaddr_storage newAddr;
 	socklen_t newAddrSize = sizeof(newAddr);
 	int sock_new;
 
 	// Try accepting connection.
-	if ((sock_new = accept(sock_listen, (struct sockaddr *)&newAddr, &newAddrSize)) == -1) {
-		fprintf(stderr, "Error: Couldn't accept: \"%s\"\n", strerror(errno));
-		exit(EXIT_FAILURE);
+	if ((sock_new = accept(sock_listen, (struct sockaddr *)&newAddr, 
+		&newAddrSize)) == -1) {
+		dsm_panic("Couldn't accept connection!");
 	}
 
 	// Register connection in pollable descriptor list.
 	if (setPollable(sock_new, POLLIN) == -1) {
-		fprintf(stderr, "Warning: Maximum pollable limit hit!\n");
+		dsm_warning("Maximum pollable limit hit. Rejected connection!");
 		close(sock_new);
 	}
 }
+
+
+/*
+ *******************************************************************************
+ *                              Message Functions                              *
+ *******************************************************************************
+*/
 
 // Sends a join message to fd informing it to connect to port.
 static void sendJoinMsg (int fd, unsigned int port) {
@@ -285,62 +244,26 @@ static void processUpdate (dsm_msg *mp) {
 }
 
 // Reads message from fd. Decodes and dispatches response. Then disconnects.
-static void processRequest (int fd) {
+static void processMessage (int fd) {
 	dsm_msg msg;
+	void (*f)(int, dsm_msg *) action;
 
 	// Read in message.
 	recvall(fd, &msg, sizeof(msg));
 
-	// Choose action based on type.
-	switch (msg.type) {
-		case 'j':
-			processJoin(fd, &msg);
-			break;
-
-		case 'u':
-			processUpdate(&msg);
-			break;
-
-		default: {
-			fprintf(stderr, "Warning: Malformed message!\n");
-			removePollable(fd);
-		}
+	// Determine action based on message type.
+	if ((action = dsm_getMsgFunction(mp->type)) == NULL) {
+		dsm_warning("No action for message type!", "Unknown);
+		removePollable(fd);
+		return;
 	}
+
+	// Execute action.
+	action(fd, &msg);
 }
 
-/*
- *******************************************************************************
- *                                    Main                                     *
- *******************************************************************************
-*/
+void msg_getSession (int fd, dsm_msg *mp);
 
-// Ensures 'size' data is transmitted to fd. Exits fatally on error.
-void sendall (int fd, void *b, size_t size) {
-	size_t sent = 0;
-	int n;
-
-	do {
-		if ((n = send(fd, b + sent, size - sent, 0)) == -1) {
-			fprintf(stderr, "Error: Bad send: \"%s\"\n", strerror(errno));
-			exit(EXIT_FAILURE);
-		}
-		sent += n;
-	} while (sent < size);
-}
-
-// Ensures 'size' data is received from fd. Exits fatally on error.
-void recvall (int fd, void *b, size_t size) {
-	size_t received = 0;
-	int n;
-
-	do {
-		if ((n = recv(fd, b + received, size - received, 0)) == -1) {
-			fprintf(stderr, "Error: Bad recv: \"%s\"\n", strerror(errno));
-			exit(EXIT_FAILURE);
-		}
-		received += n;
-	} while (received < size);
-}
 
 /*
  *******************************************************************************
@@ -353,14 +276,20 @@ int main (int argc, const char *argv[]) {
 	int sock_listen, new = 0;					// Listener socket, new count.
 	struct pollfd *pfd;							// Pointer to poll structure.
 
+	// Register message functions.
+	if (dsm_setMsgFunction (GET_SESSION, msg_getSession) != 0 ||
+		dsm_setMsgFunction (SET_SESSION, msg_setSession) != 0 ||
+		dsm_setMsgFunction (DEL_SESSION, msg_delSession) != 0) {
+		dsm_cpanic("Couldn't set message functions!", "Unknown");
+	}
+
 	// Get bound socket.
 	sock_listen = getBoundSocket(AI_PASSIVE, AF_UNSPEC, SOCK_STREAM, 
 		DSM_DEF_PORT);
 
 	// Listen on socket.
 	if (listen(sock_listen, DSM_DEF_BACKLOG) == -1) {
-		fprintf(stderr, "Error: Bad listen: \"%s\"\n", strerror(errno));
-		exit(EXIT_FAILURE);
+		dsm_panic("Couldn't listen on socket!");
 	}
 
 	// Register as a pollable socket.
@@ -376,11 +305,11 @@ int main (int argc, const char *argv[]) {
 			
 			// If listener socket: Accept connection.
 			if (pfd->fd == sock_listen) {
-				printf("[%d] Activity on listener socket!\n", getpid());
-				acceptConnection(sock_listen);
+				printf("[%d] New Connection!\n", getpid());
+				processConnection(sock_listen);
 			} else {
-				printf("[%d] Activity on connection!\n", getpid());
-				processRequest(pfd->fd);
+				printf("[%d] New Message!\n", getpid());
+				processMessage(pfd->fd);
 			}
 		}
 

@@ -1,5 +1,7 @@
 #include <string.h>
 #include "dsm_inet.h"
+#include "dsm_util.h"
+
 
 /*
  *******************************************************************************
@@ -32,12 +34,6 @@ const char *dsm_addrinfoToString (struct addrinfo *ap, char *b) {
 	return inet_ntop(ap->ai_family, addr, b, INET6_ADDRSTRLEN);
 }
 
-/*
- *******************************************************************************
- *                                      x                                      *
- *******************************************************************************
-*/
-
 // Returns a socket bound to the given port. Exits fatally on error.
 int dsm_getBoundSocket (int flags, int family, int socktype, const char *port) {
 	struct addrinfo hints, *res, *p;
@@ -51,8 +47,7 @@ int dsm_getBoundSocket (int flags, int family, int socktype, const char *port) {
 
 	// Lookup connection options.
 	if ((stat = getaddrinfo(NULL, port, &hints &res)) != 0) {
-		fprintf(stderr, "Error: getaddrinfo: \"%s\"\n", gai_strerror(stat));
-		exit(EXIT_FAILURE);
+		dsm_cpanic("getaddrinfo", gai_strerror(stat));
 	}
 
 	// Bind to first suitable result.
@@ -60,20 +55,18 @@ int dsm_getBoundSocket (int flags, int family, int socktype, const char *port) {
 
 		// Try initializing a socket.
 		if ((s = socket(p->ai_family, p->ai_socktype, p->ai_protocol)) == -1) {
-			fprintf(stderr, "Warning: Bad info: \"%s\"\n", strerror(errno));
+			dsm_warning("Socket init failed on getaddrinfo result!");
 			continue;
 		}
 
 		// Try to reuse port.
 		if (setsockopt(s, SOL_SOCKET, SO_REUSEADDR, &y, sizeof(y)) == -1) {
-			fprintf(stderr, "Error: Port busy: \"%s\"\n", strerror(errno));
-			exit(EXIT_FAILURE);
+			dsm_panic("Couldn't reuse port!");
 		}
 
 		// Try binding to the socket.
 		if (bind(s, p->ai_addr, p->ai_addrlen) == -1) {
-			fprintf(stderr, "Error: Bad bind: \"%s\"\n", strerror(errno));
-			exit(EXIT_FAILURE);
+			dsm_panic("Couldn't bind to port!");
 		}
 
 		break;
@@ -88,10 +81,26 @@ int dsm_getBoundSocket (int flags, int family, int socktype, const char *port) {
 
 // Ensures 'size' data is sent to fd. Exits fatally on error.
 void dsm_sendall (int fd, void *b, size_t size) {
+	size_t sent = 0;
+	int n;
 
+	do {
+		if ((n = send(fd, b + sent, size - sent, 0)) == -1) {
+			dsm_panic("Syscall error on send!");
+		}
+		received += n;
+	} while (sent < size);
 }
 
 // Ensures 'size' data is received from fd. Exits fatally on error.
 void dsm_recvall (int fd, void *b, size_t size) {
+	size_t received = 0;
+	int n;
 
+	do {
+		if ((n = recv(fd, b + received, size - received, 0)) == -1) {
+			dsm_panic("Syscall error on recv!");
+		}
+		received += n;
+	} while (received < size);
 }

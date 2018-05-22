@@ -23,5 +23,4 @@ void dsm_sendall (int fd, void *b, size_t size);
 void dsm_recvall (int fd, void *b, size_t size);
 
 
-
 #endif
