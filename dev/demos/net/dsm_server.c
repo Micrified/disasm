@@ -12,7 +12,7 @@
  *******************************************************************************
 */
 
-#define DSM_SERVER_ARG_FMT	"[-sid= <session-id> -addr=<address> -port=<port>]"
+#define DSM_ARG_FMT	"[-sid= <session-id> -addr=<address> -port=<port>]"
 
 
 // Returns length of match if substring is accepted. Otherwise returns zero.
@@ -32,7 +32,7 @@ int main (int argc, const char *argv[]) {
 
 	// Verify argument count.
 	if (argc != 1 && argc != 4) {
-		dsm_panicf("Bad arg count (%d). Format is: " DSM_SERVER_ARG_FMT, argc);
+		dsm_panicf("Bad arg count (%d). Format is: " DSM_ARG_FMT, argc);
 	}
 
 	// Parse arguments.
@@ -50,12 +50,12 @@ int main (int argc, const char *argv[]) {
 		}
 
 		if (port == NULL && (n = acceptSubstring("-port=", arg)) != 0) {
-			port  = arg + n;
+			port = arg + n;
 			continue;
 		}
 
 		dsm_panicf("Unknown/duplicate argument: \"%s\". Format is: "
-			DSM_SERVER_ARG_FMT, arg);
+			DSM_ARG_FMT, arg);
 	}
 
 	printf("sid = \"%s\"\n", sid);

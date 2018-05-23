@@ -22,6 +22,9 @@ const char *dsm_addrinfoToString (struct addrinfo *ap, char *b);
 // Returns a socket bound to the given port. Exits fatally on error.
 int dsm_getBoundSocket (int flags, int family, int socktype, const char *port);
 
+// Returns a socket connected to given address and port. Exits fatally on error.
+int dsm_getConnectedSocket (const char *addr, const char *port);
+
 // Ensures 'size' data is sent to fd. Exits fatally on error.
 void dsm_sendall (int fd, void *b, size_t size);
 

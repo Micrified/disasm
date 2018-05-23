@@ -10,7 +10,7 @@ daemon: ${DFILES}
 
 # Build the session server.
 server: ${SFILES}
-	${CC} ${CFLAGS} -o server ${SFILES} ${LFLAGS}
+	${CC} -Wall -o server ${SFILES} ${LFLAGS}
 
 # Clean up.
 clean:

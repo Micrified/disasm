@@ -61,7 +61,7 @@ int dsm_getBoundSocket (int flags, int family, int socktype, const char *port) {
 
 	// Lookup connection options.
 	if ((stat = getaddrinfo(NULL, port, &hints, &res)) != 0) {
-		dsm_cpanic("getaddrinfo", gai_strerror(stat));
+		dsm_panicf("getaddrinfo failed: %s", gai_strerror(stat));
 	}
 
 	// Bind to first suitable result.
@@ -75,12 +75,12 @@ int dsm_getBoundSocket (int flags, int family, int socktype, const char *port) {
 
 		// Try to reuse port.
 		if (setsockopt(s, SOL_SOCKET, SO_REUSEADDR, &y, sizeof(y)) == -1) {
-			dsm_panic("Couldn't reuse port!");
+			dsm_panicf("Couldn't reuse port (%s)", port);
 		}
 
 		// Try binding to the socket.
 		if (bind(s, p->ai_addr, p->ai_addrlen) == -1) {
-			dsm_panic("Couldn't bind to port!");
+			dsm_panicf("Couldn't bind to port (%s)", port);
 		}
 
 		break;
@@ -91,6 +91,45 @@ int dsm_getBoundSocket (int flags, int family, int socktype, const char *port) {
 
 	// Return result.
 	return ((p == NULL) ? -1 : s);	
+}
+
+// Returns a socket connected to given address and port. Exits fatally on error.
+int dsm_getConnectedSocket (const char *addr, const char *port) {
+	struct addrinfo hints, *res, *p;
+	int s, stat;
+
+	// Setup hints. 
+	memset(&hints, 0, sizeof(hints));
+	hints.ai_family = AF_UNSPEC;
+	hints.ai_socktype = SOCK_STREAM;
+
+	// Lookup connection options.
+	if ((stat = getaddrinfo(addr, port, &hints, &res)) != 0) {
+		dsm_panicf("getaddrinfo failed: %s", gai_strerror(stat));
+	}
+
+	// Bind to first suitable result.
+	for (p = res; p != NULL; p = p->ai_next) {
+
+		// Try initializing a socket.
+		if ((s = socket(p->ai_family, p->ai_socktype, p->ai_protocol)) == -1) {
+			dsm_warning("Socket init failed on getaddrinfo result!");
+			continue;
+		}
+
+		// Try connecting to the socket.
+		if (connect(s, p->ai_addr, p->ai_addrlen) == -1) {
+			dsm_panicf("Couldn't connect to %s on %s", addr, port);
+		}
+
+		break;
+	}
+
+	// Free linked-list of results.
+	freeaddrinfo(res);
+
+	// Return result.
+	return ((p == NULL) ? -1 : s);
 }
 
 // Ensures 'size' data is sent to fd. Exits fatally on error.

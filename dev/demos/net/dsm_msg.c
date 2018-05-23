@@ -24,7 +24,7 @@ void (*fmap[256])(int, dsm_msg *);
 int dsm_setMsgFunction (dsm_msg_t type, void (*f)(int, dsm_msg *)) {
 
 	// Verify value in range.
-	if (type < 0 || type > 256) {
+	if (type < MIN_MSG_VAL || type > MAX_MSG_VAL) {
 		return -1;
 	}
 
@@ -38,7 +38,7 @@ int dsm_setMsgFunction (dsm_msg_t type, void (*f)(int, dsm_msg *)) {
 void (*dsm_getMsgFunction (dsm_msg_t type))(int, dsm_msg *) {
 
 	// Verify value in range.
-	if (type < 0 || type > 256) {
+	if (type < MIN_MSG_VAL || type > MAX_MSG_VAL) {
 		return NULL;
 	}
 

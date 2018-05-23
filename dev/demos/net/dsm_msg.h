@@ -13,9 +13,11 @@
 
 // Enumeration describing message type.
 typedef enum {
-	GET_SESSION = 0,
+	MIN_MSG_VAL = 0,
+	GET_SESSION,
 	SET_SESSION,
-	DEL_SESSION
+	DEL_SESSION,
+	MAX_MSG_VAL = 256
 } dsm_msg_t;
 
 
