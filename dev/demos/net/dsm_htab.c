@@ -155,7 +155,7 @@ dsm_session *dsm_newTableEntry (const char *sid, int port) {
 	i = (DJBHash(sid, DSM_SID_SIZE) % DSM_TAB_SIZE);
 
 	// Set head of list to new entry.
-	table[i] = newTableEntry(pid, sid, port, table[i]);
+	table[i] = newTableEntry(sid, port, table[i]);
 
 	// Return pointer to entry.
 	return table[i];
@@ -205,4 +205,6 @@ int dsm_dequeueTableEntryFD (int *fd, dsm_session *sp) {
 
 	// Dequeue.
 	*fd = sp->queue[--(sp->qp)];
+
+	return 0;
 }

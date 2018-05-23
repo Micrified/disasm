@@ -1,3 +1,4 @@
+#include <stdlib.h>
 #include "dsm_msg.h"
 
 
@@ -9,7 +10,7 @@
 
 
 // Function Table.
-void (*f)(int, dsm_msg *) fmap[256];
+void (*fmap[256])(int, dsm_msg *);
 
 
 /*
@@ -29,14 +30,16 @@ int dsm_setMsgFunction (dsm_msg_t type, void (*f)(int, dsm_msg *)) {
 
 	// Install function pointer in table.
 	fmap[type] = f;
+
+	return 0;
 }
 
 // Returns function linked with given message type. Returns NULL on error.
-void (*)(int, dsm_msg *) dsm_getMsgFunction (dsm_msg_t type) {
+void (*dsm_getMsgFunction (dsm_msg_t type))(int, dsm_msg *) {
 
 	// Verify value in range.
-	if (type < - || type > 256) {
-		return -1;
+	if (type < 0 || type > 256) {
+		return NULL;
 	}
 
 	// Return function pointer in table.

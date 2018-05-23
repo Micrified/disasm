@@ -31,6 +31,9 @@ void dsm_panic (const char *msg);
 // Exits fatally with given error message. Outputs custom errno.
 void dsm_cpanic (const char *msg, const char *reason);
 
+// Exits fatally with formatted error.
+void dsm_panicf (const char *fmt, ...);
+
 // Outputs warning to stderr.
 void dsm_warning (const char *msg);
 

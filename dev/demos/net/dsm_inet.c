@@ -1,4 +1,18 @@
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
+#include <ctype.h>
+#include <errno.h>
+
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <netdb.h>
+#include <arpa/inet.h>
+#include <sys/wait.h>
+#include <signal.h>
+
 #include "dsm_inet.h"
 #include "dsm_util.h"
 
@@ -46,7 +60,7 @@ int dsm_getBoundSocket (int flags, int family, int socktype, const char *port) {
 	hints.ai_socktype = socktype;
 
 	// Lookup connection options.
-	if ((stat = getaddrinfo(NULL, port, &hints &res)) != 0) {
+	if ((stat = getaddrinfo(NULL, port, &hints, &res)) != 0) {
 		dsm_cpanic("getaddrinfo", gai_strerror(stat));
 	}
 
@@ -88,7 +102,7 @@ void dsm_sendall (int fd, void *b, size_t size) {
 		if ((n = send(fd, b + sent, size - sent, 0)) == -1) {
 			dsm_panic("Syscall error on send!");
 		}
-		received += n;
+		sent += n;
 	} while (sent < size);
 }
 

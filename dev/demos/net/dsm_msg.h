@@ -38,7 +38,7 @@ typedef struct dsm_msg {
 int dsm_setMsgFunction (dsm_msg_t type, void (*f)(int, dsm_msg *));
 
 // Returns function linked with given message type. Returns NULL on error.
-void (*)(int, dsm_msg *) dsm_getMsgFunction (dsm_msg_t type);
+void (*dsm_getMsgFunction (dsm_msg_t type))(int, dsm_msg *);
 
 
 #endif

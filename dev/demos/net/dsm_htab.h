@@ -25,7 +25,7 @@ typedef struct dsm_session {
 	char sid[DSM_SID_SIZE + 1];			// Session identifier.
 	int queue[DSM_MAX_SESSION_QUEUE];	// Queue of waiting file-descriptors.
 	unsigned int qp;					// Queue pointer.
-	int port							// Session port.
+	int port;							// Session port.
 	struct dsm_session *next;			// Linked session.
 } dsm_session;
 

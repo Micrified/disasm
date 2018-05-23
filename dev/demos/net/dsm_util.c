@@ -5,6 +5,7 @@
 #include <errno.h>
 #include <semaphore.h>
 #include <sys/mman.h>
+#include <stdarg.h>
 #include "dsm_util.h"
 
 
@@ -26,6 +27,62 @@ void dsm_panic (const char *msg) {
 void dsm_cpanic (const char *msg, const char *reason) {
 	const char *fmt = "[%d] Fatal Error: \"%s\". Reason: \"%s\"\n";
 	fprintf(stderr, fmt, getpid(), msg, reason);
+	exit(EXIT_FAILURE);
+}
+
+void dsm_panicf (const char *fmt, ...) {
+	va_list ap;
+	const char *p, *sval;
+	int ival;
+	unsigned int uval;
+	double dval;
+
+	// Print error start.
+	fprintf(stderr, "[%d] Fatal Error: \"", getpid());
+
+	// Initialize argument list.
+	va_start(ap, fmt);
+
+	// Parse format string.
+	for (p = fmt; *p; p++) {
+
+		// Ignore non-tokens.
+		if (*p != '%') {
+			putc(*p, stderr);
+			continue;
+		}
+
+		switch (*(++p)) {
+			case 'd': {
+				ival = va_arg(ap, int);
+				fprintf(stderr, "%d", ival);
+				break;
+			}
+			case 'f': {
+				dval = va_arg(ap, double);
+				fprintf(stderr, "%f", dval);
+				break;
+			}
+			case 's': {
+				for (sval = va_arg(ap, char *); *sval != '\0'; sval++) {
+					putc(*sval, stderr);
+				}
+				break;
+			}
+			case 'u': {
+				uval = va_arg(ap, unsigned);
+				fprintf(stderr, "%u", uval);
+			}
+		}
+	}
+
+	// Print error end.
+	fprintf(stderr, "\".\n"); 
+
+	// Clean up.
+	va_end(ap);
+
+	// Exit.
 	exit(EXIT_FAILURE);
 }
 

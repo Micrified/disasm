@@ -117,7 +117,121 @@ static void showPollable (void) {
 
 /*
  *******************************************************************************
- *                              Socket Functions                               *
+ *                         Message Dispatch Functions                          *
+ *******************************************************************************
+*/
+
+
+// Sends a response message to fd informing it to connect to port.
+static void send_getSessionReply (int fd, unsigned int port) {
+	dsm_msg msg;
+	memset(&msg, 0, sizeof(msg));
+
+	// Set type, port.
+	msg.type = GET_SESSION;
+	msg.port = port;
+
+	// Dispatch.
+	dsm_sendall(fd, &msg, sizeof(msg));
+}
+
+
+/*
+ *******************************************************************************
+ *                          Message Action Functions                           *
+ *******************************************************************************
+*/
+
+
+// Action for session detail request.
+static void msg_getSession (int fd, dsm_msg *mp) {
+	dsm_session *entry;
+
+	printf("[%d] Join Request: \"%s\"\n", getpid(), mp->sid);
+
+	// If no entry exists, create one.
+	if ((entry = dsm_getTableEntry(mp->sid)) == NULL) {
+		printf("[%d] No Session: \"%s\", creating!\n", getpid(), mp->sid);
+		
+		// Verify entry could be created.
+		if ((entry = dsm_newTableEntry(mp->sid, -1)) == NULL) {
+			dsm_cpanic("Couldn't create new entry!", "Limit reached?");
+		}
+
+		// Verify file-descriptor could be queued for notification.
+		if (dsm_enqueueTableEntryFD(fd, entry) != 0) {
+			dsm_cpanic("Couldn't queue fd!", "Limit reached?"); 
+		}
+
+		// Fork a session server.
+
+		return;
+	}
+
+	// If entry exists, but unset port. Then queue for notification.
+	if (entry->port <= 0) {
+		printf("[%d] Session but no port. Queueing!\n", getpid());
+
+		// Verify file-descriptor could be queued for notification.
+		if (dsm_enqueueTableEntryFD(fd, entry) != 0) {
+			dsm_cpanic("Couldn't queue fd!", "Limit reached?");
+		}
+
+		return;
+	}
+
+	// Otherwise entry exists and has valid port.
+	printf("[%d] Session \"%s\" is available. Replying!\n", getpid(), mp->sid);
+	send_getSessionReply(fd, mp->port);
+	removePollable(fd);
+	close(fd);	
+}
+
+// Action for session update request.
+static void msg_setSession (int fd, dsm_msg *mp) {
+	dsm_session *entry;
+	int waiting_fd;
+
+	// Verify session identifier exists.
+	if ((entry = dsm_getTableEntry(mp->sid)) == NULL) {
+		dsm_cpanic("Bad table entry", "Unknown");
+	}
+
+	// Update the port.
+	entry->port = mp->port;
+
+	printf("[%d] Received check-in from Session Server for \"%s\"\n", getpid(), mp->sid);
+	// Notify and close queued file-descriptors.
+	while (dsm_dequeueTableEntryFD(&waiting_fd, entry) == 0) {
+		send_getSessionReply(waiting_fd, entry->port);
+		removePollable(waiting_fd);
+		close(fd);
+	}
+}
+
+// Action for session deletion request.
+void msg_delSession (int fd, dsm_msg *mp) {
+	dsm_session *entry;
+
+	// Verify session identifier exists.
+	if ((entry = dsm_getTableEntry(mp->sid)) == NULL) {
+		dsm_cpanic("No session to delete!", "Unknown");
+	}
+
+	// Remove the entry.
+	if (dsm_removeTableEntry(mp->sid) != 0) {
+		dsm_cpanic("Unable to remove table entry!", "Unknown");
+	}
+
+	// Close connection with sender.
+	removePollable(fd);
+	close(fd);
+}
+
+
+/*
+ *******************************************************************************
+ *                              General Functions                              *
  *******************************************************************************
 */
 
@@ -142,118 +256,17 @@ static void processConnection (int sock_listen) {
 }
 
 
-/*
- *******************************************************************************
- *                              Message Functions                              *
- *******************************************************************************
-*/
-
-// Sends a join message to fd informing it to connect to port.
-static void sendJoinMsg (int fd, unsigned int port) {
-	dsm_msg msg;
-	memset(&msg, 0, sizeof(msg));
-	
-	// Set type, port.
-	msg.type = 'j';
-	msg.port = port;
-
-	// Send message.
-	sendall(fd, &msg, sizeof(msg));
-}
-
-// Processes a join message.
-static void processJoin (int fd, dsm_msg *mp) {
-	dsm_session *entry;
-	printf("[%d] Join Request for: \"%s\"\n", getpid(), msg->sid);
-
-	// Lookup SID:
-	// 1) If no entry exists, create one. 
-	// 2) If an entry exists, but no port. Queue fd.
-	// 3) If an entry exists with a port, send response and remove.
-
-	// 1.
-	if ((entry = dsm_getTableEntry(mp->sid)) == NULL) {
-	
-		printf("[%d] SID doesn't exist. Creating!\n", getpid());
-
-		// Create new entry with unset port.
-		if ((entry = dsm_newTableEntry(mp->sid, -1)) == NULL) {
-			fprintf(stderr, "Error: Failed to create new entry!\n");
-			exit(EXIT_FAILURE);
-		}
-
-		// Enqueue file-descriptor.
-		if (dsm_enqueueTableEntryFD(fd, entry) == -1) {
-			fprintf(stderr, "Error: Couldn't enqueue fd!\n");
-			exit(EXIT_FAILURE);
-		} 
-
-		// Fork the session server.
-		if (fork() == 0) {
-			// TODO: execSessionServer(sp->sid, DSM_DEFAULT_PORT);
-		}
-
-		// Exit early.
-		return;
-	}
-
-	// 2.
-	if (entry->port == -1) {
-
-		printf("[%d] SID exists, but being queued!\n", getpid());
-
-		// Enqueue file-descriptor.
-		if (dsm_enqueueTableEntryFD(fd, entry) == -1) {
-			fprintf(stderr, "Error: Couldn't enqueue fd!\n");
-			exit(EXIT_FAILURE);
-		}
-
-		return;
-	}
-
-	printf("[%d] SID exists, sending data!\n", getpid());
-	
-	// 3. Send response and close connection.
-	sendJoinMsg(fd, entry->port);
-
-	// Remove fd and close connection.
-	removePollable(fd);
-	close(fd);
-}
-
-// Process an update message.
-static void processUpdate (dsm_msg *mp) {
-	dsm_session *entry;
-	int fd;
-
-	// If identifier does not exist, error out.
-	if ((entry = dsm_getTableEntry(mp->sid)) == NULL) {
-		fprintf(stderr, "Error: Expected entry to exist!\n");
-		exit(EXIT_FAILURE);
-	}
-
-	// Update the port.
-	entry->port = mp->port;
-
-	// For all queued file-descriptors. Send response and close.
-	while (dsm_dequeueTableEntryFD(&fd, entry) == 0) {
-		sendJoinMsg(fd, entry->port);
-		removePollable(fd);
-		close(fd);
-	}	
-}
-
 // Reads message from fd. Decodes and dispatches response. Then disconnects.
 static void processMessage (int fd) {
 	dsm_msg msg;
-	void (*f)(int, dsm_msg *) action;
+	void (*action)(int, dsm_msg *);
 
 	// Read in message.
-	recvall(fd, &msg, sizeof(msg));
+	dsm_recvall(fd, &msg, sizeof(msg));
 
 	// Determine action based on message type.
-	if ((action = dsm_getMsgFunction(mp->type)) == NULL) {
-		dsm_warning("No action for message type!", "Unknown);
+	if ((action = dsm_getMsgFunction(msg.type)) == NULL) {
+		dsm_warning("No action for message type!");
 		removePollable(fd);
 		return;
 	}
@@ -261,8 +274,6 @@ static void processMessage (int fd) {
 	// Execute action.
 	action(fd, &msg);
 }
-
-void msg_getSession (int fd, dsm_msg *mp);
 
 
 /*
@@ -284,7 +295,7 @@ int main (int argc, const char *argv[]) {
 	}
 
 	// Get bound socket.
-	sock_listen = getBoundSocket(AI_PASSIVE, AF_UNSPEC, SOCK_STREAM, 
+	sock_listen = dsm_getBoundSocket(AI_PASSIVE, AF_UNSPEC, SOCK_STREAM, 
 		DSM_DEF_PORT);
 
 	// Listen on socket.

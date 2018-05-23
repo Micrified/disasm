@@ -1,6 +1,12 @@
 #if !defined(DSM_INET_H)
 #define DSM_INET_H
 
+
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <netdb.h>
+
+
 /*
  *******************************************************************************
  *                            Function Declarations                            *
