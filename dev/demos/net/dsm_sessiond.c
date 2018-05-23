@@ -48,6 +48,19 @@ struct pollfd pollfds[DSM_MAX_POLLABLE];
 // Pollable file-descriptor pointer.
 unsigned int npollfds;
 
+// The listener socket.
+int sock_listen;
+
+
+/*
+ *******************************************************************************
+ *                            Forward Declarations                             *
+ *******************************************************************************
+*/
+
+// Exec's to session server. Supplies address, port, and SID as input.
+static void execServer (const char *address, const char *port, 
+	const char *sid);
 
 /*
  *******************************************************************************
@@ -138,7 +151,7 @@ static void send_getSessionReply (int fd, unsigned int port) {
 
 /*
  *******************************************************************************
- *                          Message Action Functions                           *
+ *                          Message Handler Functions                          *
  *******************************************************************************
 */
 
@@ -146,6 +159,7 @@ static void send_getSessionReply (int fd, unsigned int port) {
 // Action for session detail request.
 static void msg_getSession (int fd, dsm_msg *mp) {
 	dsm_session *entry;
+	char addr_buf[INET6_ADDRSTRLEN];
 
 	printf("[%d] Join Request: \"%s\"\n", getpid(), mp->sid);
 
@@ -163,13 +177,19 @@ static void msg_getSession (int fd, dsm_msg *mp) {
 			dsm_cpanic("Couldn't queue fd!", "Limit reached?"); 
 		}
 
+		// Get current connection details.
+		dsm_getSocketInfo(sock_listen, addr_buf, sizeof(addr_buf), NULL);
+
 		// Fork a session server.
+		if (fork() == 0) {
+			execServer(addr_buf, DSM_DEF_PORT, mp->sid);
+		}
 
 		return;
 	}
 
 	// If entry exists, but unset port. Then queue for notification.
-	if (entry->port <= 0) {
+	if (entry->port == -1) {
 		printf("[%d] Session but no port. Queueing!\n", getpid());
 
 		// Verify file-descriptor could be queued for notification.
@@ -182,7 +202,7 @@ static void msg_getSession (int fd, dsm_msg *mp) {
 
 	// Otherwise entry exists and has valid port.
 	printf("[%d] Session \"%s\" is available. Replying!\n", getpid(), mp->sid);
-	send_getSessionReply(fd, mp->port);
+	send_getSessionReply(fd, entry->port);
 	removePollable(fd);
 	close(fd);	
 }
@@ -205,17 +225,31 @@ static void msg_setSession (int fd, dsm_msg *mp) {
 	while (dsm_dequeueTableEntryFD(&waiting_fd, entry) == 0) {
 		send_getSessionReply(waiting_fd, entry->port);
 		removePollable(waiting_fd);
-		close(fd);
+		close(waiting_fd);
 	}
+
+	removePollable(fd);
+	close(fd);
 }
 
 // Action for session deletion request.
 void msg_delSession (int fd, dsm_msg *mp) {
 	dsm_session *entry;
-
+	
 	// Verify session identifier exists.
 	if ((entry = dsm_getTableEntry(mp->sid)) == NULL) {
 		dsm_cpanic("No session to delete!", "Unknown");
+	}
+
+	// Eject any pending processes (should never happen).
+	if (entry->qp > 0) {
+		dsm_warning("Session to be destroyed still has pending clients!");
+		int waiting_fd;
+		
+		while (dsm_dequeueTableEntryFD(&waiting_fd, entry) == 0) {
+			removePollable(waiting_fd);
+			close(waiting_fd);
+		}
 	}
 
 	// Remove the entry.
@@ -234,6 +268,34 @@ void msg_delSession (int fd, dsm_msg *mp) {
  *                              General Functions                              *
  *******************************************************************************
 */
+
+// Exec's to session server. Supplies address, port, and SID as input.
+static void execServer (const char *address, const char *port, 
+	const char *sid) {
+	char *argv[4 + 1];						// Argument vector: 4 arg + NULL.
+	char *filename = "server";				// Executable filename.
+	char buf_sid[5 + DSM_SID_SIZE + 1];		// -sid= + <sid> + \0.
+	char buf_addr[6 + INET6_ADDRSTRLEN];	// -addr= + <addr>.
+	char buf_port[6 + 6];					// -port= + <port> + \0.
+
+	// Configure argument buffers.
+	sprintf(buf_sid, "-sid=%s", sid);
+	sprintf(buf_addr, "-addr=%s", address);
+	sprintf(buf_port, "-port=%s", port);
+
+	// Set program arguments.
+	argv[0] = filename;
+	argv[1] = buf_addr;
+	argv[2] = buf_port;
+	argv[3] = buf_sid;
+	argv[4] = NULL;
+
+	// Exec the session server.
+	execve(filename, argv, NULL);
+
+	// Error out. 
+	dsm_panic("Execve failed!");
+}
 
 
 // Accepts incoming connection, and updates the list of pollable descriptors.
@@ -260,9 +322,13 @@ static void processConnection (int sock_listen) {
 static void processMessage (int fd) {
 	dsm_msg msg;
 	void (*action)(int, dsm_msg *);
+	
+	printf("[%d] Receiving message...\n", getpid());
 
 	// Read in message.
 	dsm_recvall(fd, &msg, sizeof(msg));
+
+	printf("[%d] Received!\n", getpid());
 
 	// Determine action based on message type.
 	if ((action = dsm_getMsgFunction(msg.type)) == NULL) {
@@ -284,7 +350,7 @@ static void processMessage (int fd) {
 
 
 int main (int argc, const char *argv[]) {
-	int sock_listen, new = 0;					// Listener socket, new count.
+	int new = 0;								// New count.
 	struct pollfd *pfd;							// Pointer to poll structure.
 
 	// Register message functions.
@@ -313,6 +379,11 @@ int main (int argc, const char *argv[]) {
 		
 		for (int i = 0; i < npollfds; i++) {
 			pfd = pollfds + i;
+			
+			// Only check if there is data to read.
+			if ((pfd->revents & POLLIN) == 0) {
+				continue;
+			}
 			
 			// If listener socket: Accept connection.
 			if (pfd->fd == sock_listen) {

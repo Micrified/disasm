@@ -132,6 +132,58 @@ int dsm_getConnectedSocket (const char *addr, const char *port) {
 	return ((p == NULL) ? -1 : s);
 }
 
+// Gets socket address (use buffer length INET6_ADDRSTRLEN) and port.
+void dsm_getSocketInfo (int s, char *addr_buf, size_t buf_size, 
+	unsigned int *port) {
+	struct sockaddr_storage addrinfo;
+	socklen_t size = sizeof(addrinfo);
+	void *addr;
+	int family;
+
+	// Verify input.
+	if (addr_buf != NULL && buf_size < INET6_ADDRSTRLEN) {
+		dsm_cpanic("dsm_getSocketInfo failed", "buf_size too small!"); 
+	}
+	
+	// Extract socket information.
+	if (getsockname(s, (struct sockaddr *)&addrinfo, &size) != 0) {
+		dsm_panic("getsockname failed!");
+	}
+
+	// Verify family, cast to appropriate structure. Assign port.
+	if (addrinfo.ss_family == AF_INET) {
+		struct sockaddr_in *ipv4 = (struct sockaddr_in *)&addrinfo;
+		family = ipv4->sin_family;
+		addr = &(ipv4->sin_addr);
+		if (port != NULL) {
+			*port = ipv4->sin_port;
+		}
+	} else {
+		struct sockaddr_in6 *ipv6 = (struct sockaddr_in6 *)&addrinfo;
+		family = ipv6->sin6_family;
+		addr = &(ipv6->sin6_addr);
+		if (port != NULL) {
+			*port = ipv6->sin6_port;
+		}
+	}
+
+	// Convert address to string, write to buffer.
+	if (addr_buf != NULL && 
+		inet_ntop(family, addr, addr_buf, buf_size) == NULL) {
+		dsm_panic("inet_ntop failed!");
+	}
+}
+
+// [DEBUG] Outputs socket's address and port.
+void dsm_showSocketInfo (int s) {
+	unsigned int port;
+	char b[INET6_ADDRSTRLEN];
+
+	dsm_getSocketInfo(s, b, INET6_ADDRSTRLEN, &port);
+
+	printf("FD: %d, ADDR: \"%s\", PORT: %u\n", s, b, port);
+}
+
 // Ensures 'size' data is sent to fd. Exits fatally on error.
 void dsm_sendall (int fd, void *b, size_t size) {
 	size_t sent = 0;

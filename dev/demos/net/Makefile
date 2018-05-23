@@ -1,5 +1,5 @@
 CC=gcc
-CFLAGS=-Wall -Werror
+CFLAGS=-Wall -Werror -g
 LFLAGS= -pthread
 DFILES= dsm_sessiond.c dsm_htab.c dsm_inet.c dsm_msg.c dsm_util.c
 SFILES= dsm_server.c dsm_inet.c dsm_msg.c dsm_util.c
@@ -10,7 +10,7 @@ daemon: ${DFILES}
 
 # Build the session server.
 server: ${SFILES}
-	${CC} -Wall -o server ${SFILES} ${LFLAGS}
+	${CC} ${CFLAGS} -o server ${SFILES} ${LFLAGS}
 
 # Clean up.
 clean:
