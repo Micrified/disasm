@@ -11,7 +11,7 @@
 
 /*
  *******************************************************************************
- *                            Function Definitions                             *
+ *                          I/O Function Definitions                           *
  *******************************************************************************
 */
 
@@ -30,6 +30,7 @@ void dsm_cpanic (const char *msg, const char *reason) {
 	exit(EXIT_FAILURE);
 }
 
+// Exits fatally with formatted error. Supports tokens: {%s, %d, %f, %u}.
 void dsm_panicf (const char *fmt, ...) {
 	va_list ap;
 	const char *p, *sval;
@@ -92,6 +93,13 @@ void dsm_warning (const char *msg) {
 	fprintf(stderr, fmt, getpid(), msg);
 }
 
+/*
+ *******************************************************************************
+ *                       Semaphore Function Definitions                        *
+ *******************************************************************************
+*/
+
+
 // Increments a semaphore. Panics on error.
 void dsm_up (sem_t *sp) {
 	if (sem_post(sp) == -1) {
@@ -116,6 +124,14 @@ int dsm_getSemValue (sem_t *sp) {
 
 	return v;
 }
+
+
+/*
+ *******************************************************************************
+ *                         Memory Function Definitions                         *
+ *******************************************************************************
+*/
+
 
 // Sets the given protections to a memory page. Exits fatally on error.
 void dsm_mprotect (void *address, size_t size, int flags) {

@@ -6,10 +6,13 @@
 #include <sys/socket.h>
 #include <netdb.h>
 
+#include <sys/poll.h>
+
 #include "dsm_server.h"
 #include "dsm_inet.h"
 #include "dsm_msg.h"
 #include "dsm_util.h"
+#include "dsm_poll.h"
 
 
 /*
@@ -19,6 +22,13 @@
 */
 
 
+// Default listener socket backlog
+#define DSM_DEF_BACKLOG			32
+
+// Minimum number of concurrent pollable connections.
+#define DSM_MIN_POLLABLE		32
+
+// Usage format.
 #define DSM_ARG_FMT	"[-sid= <session-id> -addr=<address> -port=<port>]"
 
 
@@ -28,6 +38,9 @@
  *******************************************************************************
 */
 
+
+// Pollable file-descriptor set.
+pollset *pollableSet;
 
 // The listener socket.
 int sock_listen;
@@ -104,21 +117,12 @@ static int acceptSubstring (const char *substr, const char *str) {
 	return i * (*substr == '\0');
 }
 
+// Parses arguments and sets pointers. Returns nonzero if full args given.
+static int parseArgs (int argc, const char *argv[], const char **sid_p, 
+	const char **addr_p, const char **port_p) {
+	const char *arg;
+	int n;
 
-/*
- *******************************************************************************
- *                                    Main                                     *
- *******************************************************************************
-*/
-
-
-int main (int argc, const char *argv[]) {
-	int n, withDaemon = 0;
- 	const char *arg;						// Argument pointer.
-	const char *sid = NULL;					// Session-identifier.
-	const char *addr = NULL;				// Daemon address.
-	const char *port = NULL;				// Daemon port.
-	
 	// Verify argument count.
 	if (argc != 1 && argc != 4) {
 		dsm_panicf("Bad arg count (%d). Format is: " DSM_ARG_FMT, argc);
@@ -128,18 +132,18 @@ int main (int argc, const char *argv[]) {
 	while (--argc > 0) {
 		arg = *(++argv);
 
-		if (sid == NULL && (n = acceptSubstring("-sid=", arg)) != 0) {
-			sid = arg + n;
+		if (*sid_p == NULL && (n = acceptSubstring("-sid=", arg)) != 0) {
+			*sid_p = arg + n;
 			continue;
 		}
 
-		if (addr == NULL && (n = acceptSubstring("-addr=", arg)) != 0) {
-			addr = arg + n;
+		if (*addr_p == NULL && (n = acceptSubstring("-addr=", arg)) != 0) {
+			*addr_p = arg + n;
 			continue;
 		}
 
-		if (port == NULL && (n = acceptSubstring("-port=", arg)) != 0) {
-			port = arg + n;
+		if (*port_p == NULL && (n = acceptSubstring("-port=", arg)) != 0) {
+			*port_p = arg + n;
 			continue;
 		}
 
@@ -147,18 +151,48 @@ int main (int argc, const char *argv[]) {
 			DSM_ARG_FMT, arg);
 	}
 
-	// Set withDaemon flag.
-	withDaemon = (sid != NULL && addr != NULL && port != NULL);
+	return (*sid_p != NULL && *addr_p != NULL && *port_p != NULL);
+}
+
+
+/*
+ *******************************************************************************
+ *                                    Main                                     *
+ *******************************************************************************
+*/
+
+
+int main (int argc, const char *argv[]) {
+	int withDaemon = 0;						// Boolean (should contact daemon?)
+	const char *sid = NULL;					// Session-identifier.
+	const char *addr = NULL;				// Daemon address.
+	const char *port = NULL;				// Daemon port.
+
+	// Verify and parse arguments.
+	withDaemon = parseArgs(argc, argv, &sid, &addr, &port);
+
+	// Initialize pollable-set.
+	pollableSet = dsm_initPollSet(DSM_MIN_POLLABLE);
 
 	// Setup listener socket: Any port.
 	sock_listen = dsm_getBoundSocket(AI_PASSIVE, AF_UNSPEC, SOCK_STREAM, "0");
+
+	dsm_showSocketInfo(sock_listen);
+
+	// Listen on socket.
+	if (listen(sock_listen, DSM_DEF_BACKLOG) == -1) {
+		dsm_panic("Couldn't listen on socket!");
+	}
+
+	// Set listener socket as pollable.
+	dsm_setPollable(sock_listen, POLLIN, pollableSet);
+
+	dsm_showPollable(pollableSet);
 	
 	// If daemon details provided, dispatch update message.
 	if (withDaemon != 0) {
 		send_setSession(sid, addr, port);
 	}
-
-	dsm_showSocketInfo(sock_listen);
 
 	char c;
 	printf("Would you like to destroy the session now?\n");
@@ -167,6 +201,15 @@ int main (int argc, const char *argv[]) {
 	if (withDaemon != 0) {
 		send_delSession(sid, addr, port);
 	}
+
+	// Remove listener socket.
+	dsm_removePollable(sock_listen, pollableSet);
+
+	// Close listener socket.
+	close(sock_listen);
+
+	// Free pollable set.
+	dsm_freePollSet(pollableSet);
 
 	return 0;
 }
