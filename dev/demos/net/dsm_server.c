@@ -494,8 +494,10 @@ static void processMessage (int fd) {
 	
 	printf("[%d] Receiving message...\n", getpid());
 
-	// Read in message.
-	dsm_recvall(fd, &msg, sizeof(msg));
+	// Read in message: If no connection -> Panic.
+	if (dsm_recvall(fd, &msg, sizeof(msg)) != 0) {
+		dsm_cpanic("Foreign host closed their socket!", "Imminent deadlock!");
+	}
 
 	printf("[%d] Received!\n", getpid());
 

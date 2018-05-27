@@ -266,7 +266,7 @@ static void processMessage (int fd) {
 
 	// Read in message.
 	if (dsm_recvall(fd, &msg, sizeof(msg)) != 0) {
-		dsm_warning("Other party has closed connection! Closing...");
+		dsm_warning("Alien party closed connection: Closing socket!");
 		dsm_removePollable(fd, pollableSet);
 		close(fd);
 	}
