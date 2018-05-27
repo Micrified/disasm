@@ -207,7 +207,7 @@ static void msg_stopDone (int fd, dsm_msg *mp) {
 	}
 
 	// If (n-1) processes have stopped: Inform writer, advance to next step.
-	printf("[%d] Received MSG_STOP_DONE (%d/%d needed)\n", getpid(), nproc_stopped + data.nproc, nproc);
+	printf("[%d] Received MSG_STOP_DONE (%d/%d needed)\n", getpid(), nproc_stopped + data.nproc, nproc - 1);
 	if ((nproc_stopped += data.nproc) >= (nproc - 1)) {
 
 		// Ensure writer exists.
@@ -406,9 +406,9 @@ static void showOpQueue (dsm_opqueue *oq) {
 	printf("oq->queueSize = %zu\n", oq->queueSize);
 	printf("oq->head = %u, oq->tail = %u\n", oq->head, oq->tail);
 	printf("oq->queue = [");
-	for (int i = 0; i < oq->queueSize; i++) {
+	for (int i = oq->tail; i != oq->head; i = (i + 1) % oq->queueSize) {
 		printf("%d", oq->queue[i]);
-		if (i < (oq->queueSize - 1)) {
+		if (i < (oq->head - 1)) {
 			putchar(',');
 		}
 	}
@@ -599,6 +599,8 @@ int main (int argc, const char *argv[]) {
 	
 
 	// ----------------------------- Clean up ----------------------------------
+
+	printf("[%d] Cleaning up and exiting!\n", getpid());
 
 	// If daemon details provided, dispatch destroy message.
 	if (withDaemon != 0) {

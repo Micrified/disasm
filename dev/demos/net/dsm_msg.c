@@ -72,23 +72,23 @@ void dsm_showMsg(dsm_msg *mp) {
 			break;
 		}
 		case MSG_SYNC_INFO: {
-			printf("TYPE: MSG_DEL_SESSION\n");
+			printf("TYPE: MSG_SYNC_INFO\n");
 			printf("OFFSET: %zu\n", mp->payload.sync.offset);
 			printf("SIZE: %zu\n", mp->payload.sync.size);
 			break;
 		}
 		case MSG_STOP_DONE: {
-			printf("TYPE: MSG_DEL_SESSION\n");
+			printf("TYPE: MSG_STOP_DONE\n");
 			printf("NPROC: %u\n", mp->payload.done.nproc);
 			break;
 		}
 		case MSG_SYNC_DONE: {
-			printf("TYPE: MSG_DEL_SESSION\n");
+			printf("TYPE: MSG_SYNC_DONE\n");
 			printf("NPROC: %u\n", mp->payload.done.nproc);
 			break;
 		}
 		case MSG_PRGM_DONE: {
-			printf("TYPE: MSG_DEL_SESSION\n");
+			printf("TYPE: MSG_PRGM_DONE\n");
 			break;
 		}
 		default:

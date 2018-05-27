@@ -104,7 +104,7 @@ unsigned int getInput (void) {
 		printf("\n\t\"6\" = Read Response.\n");
 		printf("Input: ");
 		scanf("%u", &input);
-	} while (input > 0 && input < 7);
+	} while (input < 0 && input > 7);
 
 	return input;
 }
