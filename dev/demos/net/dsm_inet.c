@@ -198,7 +198,8 @@ void dsm_sendall (int fd, void *b, size_t size) {
 }
 
 // Ensures 'size' data is received from fd. Exits fatally on error.
-void dsm_recvall (int fd, void *b, size_t size) {
+// Returns zero if all is normal. Returns nonzero if connection is closed.
+int dsm_recvall (int fd, void *b, size_t size) {
 	size_t received = 0;
 	int n;
 
@@ -206,6 +207,14 @@ void dsm_recvall (int fd, void *b, size_t size) {
 		if ((n = recv(fd, b + received, size - received, 0)) == -1) {
 			dsm_panic("Syscall error on recv!");
 		}
+		
+		// Check if socket is closed.
+		if (n == 0) {
+			return -1;
+		}
+
 		received += n;
 	} while (received < size);
+
+	return 0;
 }

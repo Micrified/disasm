@@ -36,7 +36,8 @@ void dsm_showSocketInfo (int s);
 void dsm_sendall (int fd, void *b, size_t size);
 
 // Ensures 'size' data is received from fd. Exits fatally on error.
-void dsm_recvall (int fd, void *b, size_t size);
+// Returns zero if all is normal. Returns nonzero if connection is closed.
+int dsm_recvall (int fd, void *b, size_t size);
 
 
 #endif

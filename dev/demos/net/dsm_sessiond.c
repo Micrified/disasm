@@ -118,9 +118,9 @@ static void msg_getSession (int fd, dsm_msg *mp) {
 		dsm_getSocketInfo(sock_listen, addr_buf, sizeof(addr_buf), NULL);
 
 		// Fork a session server.
-		//if (fork() == 0) {
-		//	execServer(addr_buf, DSM_DEF_PORT, data.sid, data.nproc);
-		//}
+		if (fork() == 0) {
+			execServer(addr_buf, DSM_DEF_PORT, data.sid, data.nproc);
+		}
 
 		return;
 	}
@@ -265,7 +265,11 @@ static void processMessage (int fd) {
 	printf("[%d] Receiving message...\n", getpid());
 
 	// Read in message.
-	dsm_recvall(fd, &msg, sizeof(msg));
+	if (dsm_recvall(fd, &msg, sizeof(msg)) != 0) {
+		dsm_warning("Other party has closed connection! Closing...");
+		dsm_removePollable(fd, pollableSet);
+		close(fd);
+	}
 
 	printf("[%d] Received!\n", getpid());
 

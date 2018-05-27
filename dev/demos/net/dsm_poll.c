@@ -88,6 +88,11 @@ void dsm_removePollable (int fd, pollset *p) {
 	for (i = 0; (i < p->fp && p->fds[i].fd != fd); i++)
 		;
 
+	// If target didn't exist, return early.
+	if (i == p->fp) {
+		return;
+	}
+
 	// Overwrite and shuffle.
 	for (j = i; j < (p->fp - 1); j++) {
 		p->fds[j] = p->fds[j + 1];
