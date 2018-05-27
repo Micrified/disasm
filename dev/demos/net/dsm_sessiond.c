@@ -13,13 +13,13 @@
 #include <sys/wait.h>
 #include <signal.h>
 
-#include <sys/poll.h>
-
 #include "dsm_sessiond.h"
 #include "dsm_msg.h"
 #include "dsm_htab.h"
 #include "dsm_inet.h"
 #include "dsm_util.h"
+#include "dsm_poll.h"
+
 
 /*
  *******************************************************************************
@@ -31,8 +31,8 @@
 // Default listener socket backlog.
 #define	DSM_DEF_BACKLOG			32
 
-// Maximum number of concurrent pollable connections.
-#define	DSM_MAX_POLLABLE		64
+// Minimum number of concurrent pollable connections.
+#define	DSM_MIN_POLLABLE		64
 
 
 /*
@@ -42,11 +42,11 @@
 */
 
 
-// Pollable file-descriptors.
-struct pollfd pollfds[DSM_MAX_POLLABLE];
+// Pollable file-descriptor set.
+pollset *pollableSet;
 
-// Pollable file-descriptor pointer.
-unsigned int npollfds;
+// Message function map.
+dsm_msg_func fmap[MSG_MAX_VALUE];
 
 // The listener socket.
 int sock_listen;
@@ -58,74 +58,10 @@ int sock_listen;
  *******************************************************************************
 */
 
+
 // Exec's to session server. Supplies address, port, and SID as input.
-static void execServer (const char *address, const char *port, 
-	const char *sid);
-
-/*
- *******************************************************************************
- *                              Polling Functions                              *
- *******************************************************************************
-*/
-
-
-// Adds or updates fd with events to pollable list. Returns nonzero on error.
-static int setPollable (int fd, short events) {
-	
-	// Search to see if fd exists. Update if it does.
-	for (int i = 0; i < npollfds; i++) {
-		if (pollfds[i].fd == fd) {
-			pollfds[i].events = events;
-			return 0;
-		}
-	}
-
-	// Otherwise, check if room for new fd. Return nonzero if not.
-	if (npollfds >= DSM_MAX_POLLABLE) {
-		return -1;
-	}
-
-	// Add fd with events and return zero.
-	pollfds[npollfds++] = (struct pollfd) {
-		.fd = fd,
-		.events = events,
-		.revents = 0
-	};
-
-	return 0;
-}
-
-// Closes and removes fd from pollable list. Remaining sets are shuffled down.
-static void removePollable (int fd) {
-	int i, j;
-
-	// Search for target.
-	for (i = 0; (i < npollfds && pollfds[i].fd != fd); i++)
-		;
-
-	// Close target.
-	close(fd);
-
-	// Overwrite and shuffle.
-	for (j = i; j < (npollfds - 1); j++) {
-		pollfds[j] = pollfds[j + 1];
-	}
-	
-	// Decrement npollfds.
-	--npollfds;
-}
-
-// [DEBUG] Prints the value of all pollable file-descriptors.
-static void showPollable (void) {
-	printf("Pollable = [");
-	for (int i = 0; i < npollfds; i++) {
-		printf("%d", pollfds[i].fd);
-		if (i < (npollfds - 1)) {
-			putchar(',');
-		}
-	}
-	printf("]\n");
-}
+static void execServer (const char *address, const char *port, const char *sid, 
+	int nproc);
 
 
 /*
@@ -141,8 +77,8 @@ static void send_getSessionReply (int fd, unsigned int port) {
 	memset(&msg, 0, sizeof(msg));
 
 	// Set type, port.
-	msg.type = GET_SESSION;
-	msg.port = port;
+	msg.type = MSG_SET_SESSION;
+	msg.payload.set.port = port;
 
 	// Dispatch.
 	dsm_sendall(fd, &msg, sizeof(msg));
@@ -160,15 +96,16 @@ static void send_getSessionReply (int fd, unsigned int port) {
 static void msg_getSession (int fd, dsm_msg *mp) {
 	dsm_session *entry;
 	char addr_buf[INET6_ADDRSTRLEN];
+	dsm_msg_get data = mp->payload.get;
 
-	printf("[%d] Join Request: \"%s\"\n", getpid(), mp->sid);
+	printf("[%d] Join Request: \"%s\"\n", getpid(), data.sid);
 
 	// If no entry exists, create one.
-	if ((entry = dsm_getTableEntry(mp->sid)) == NULL) {
-		printf("[%d] No Session: \"%s\", creating!\n", getpid(), mp->sid);
+	if ((entry = dsm_getTableEntry(data.sid)) == NULL) {
+		printf("[%d] No Session: \"%s\", creating!\n", getpid(), data.sid);
 		
 		// Verify entry could be created.
-		if ((entry = dsm_newTableEntry(mp->sid, -1)) == NULL) {
+		if ((entry = dsm_newTableEntry(data.sid, -1, data.nproc)) == NULL) {
 			dsm_cpanic("Couldn't create new entry!", "Limit reached?");
 		}
 
@@ -181,9 +118,9 @@ static void msg_getSession (int fd, dsm_msg *mp) {
 		dsm_getSocketInfo(sock_listen, addr_buf, sizeof(addr_buf), NULL);
 
 		// Fork a session server.
-		if (fork() == 0) {
-			execServer(addr_buf, DSM_DEF_PORT, mp->sid);
-		}
+		//if (fork() == 0) {
+		//	execServer(addr_buf, DSM_DEF_PORT, data.sid, data.nproc);
+		//}
 
 		return;
 	}
@@ -201,9 +138,9 @@ static void msg_getSession (int fd, dsm_msg *mp) {
 	}
 
 	// Otherwise entry exists and has valid port.
-	printf("[%d] Session \"%s\" is available. Replying!\n", getpid(), mp->sid);
+	printf("[%d] Session \"%s\" is available. Replying!\n", getpid(), data.sid);
 	send_getSessionReply(fd, entry->port);
-	removePollable(fd);
+	dsm_removePollable(fd, pollableSet);
 	close(fd);	
 }
 
@@ -211,33 +148,35 @@ static void msg_getSession (int fd, dsm_msg *mp) {
 static void msg_setSession (int fd, dsm_msg *mp) {
 	dsm_session *entry;
 	int waiting_fd;
+	dsm_msg_set data = mp->payload.set;
 
 	// Verify session identifier exists.
-	if ((entry = dsm_getTableEntry(mp->sid)) == NULL) {
+	if ((entry = dsm_getTableEntry(data.sid)) == NULL) {
 		dsm_cpanic("Bad table entry", "Unknown");
 	}
 
 	// Update the port.
-	entry->port = mp->port;
+	entry->port = data.port;
 
-	printf("[%d] Received check-in from Session Server for \"%s\"\n", getpid(), mp->sid);
+	printf("[%d] Received check-in from Session Server for \"%s\"\n", getpid(), data.sid);
 	// Notify and close queued file-descriptors.
 	while (dsm_dequeueTableEntryFD(&waiting_fd, entry) == 0) {
 		send_getSessionReply(waiting_fd, entry->port);
-		removePollable(waiting_fd);
+		dsm_removePollable(fd, pollableSet);
 		close(waiting_fd);
 	}
 
-	removePollable(fd);
+	dsm_removePollable(fd, pollableSet);
 	close(fd);
 }
 
 // Action for session deletion request.
 void msg_delSession (int fd, dsm_msg *mp) {
 	dsm_session *entry;
-	
+	dsm_msg_del data = mp->payload.del;
+
 	// Verify session identifier exists.
-	if ((entry = dsm_getTableEntry(mp->sid)) == NULL) {
+	if ((entry = dsm_getTableEntry(data.sid)) == NULL) {
 		dsm_cpanic("No session to delete!", "Unknown");
 	}
 
@@ -247,18 +186,18 @@ void msg_delSession (int fd, dsm_msg *mp) {
 		int waiting_fd;
 		
 		while (dsm_dequeueTableEntryFD(&waiting_fd, entry) == 0) {
-			removePollable(waiting_fd);
+			dsm_removePollable(waiting_fd, pollableSet);
 			close(waiting_fd);
 		}
 	}
 
 	// Remove the entry.
-	if (dsm_removeTableEntry(mp->sid) != 0) {
+	if (dsm_removeTableEntry(data.sid) != 0) {
 		dsm_cpanic("Unable to remove table entry!", "Unknown");
 	}
 
 	// Close connection with sender.
-	removePollable(fd);
+	dsm_removePollable(fd, pollableSet);
 	close(fd);
 }
 
@@ -270,25 +209,28 @@ void msg_delSession (int fd, dsm_msg *mp) {
 */
 
 // Exec's to session server. Supplies address, port, and SID as input.
-static void execServer (const char *address, const char *port, 
-	const char *sid) {
-	char *argv[4 + 1];						// Argument vector: 4 arg + NULL.
+static void execServer (const char *address, const char *port, const char *sid, 
+	int nproc) {
+	char *argv[5 + 1];						// Argument vector: 4 arg + NULL.
 	char *filename = "server";				// Executable filename.
 	char buf_sid[5 + DSM_SID_SIZE + 1];		// -sid= + <sid> + \0.
 	char buf_addr[6 + INET6_ADDRSTRLEN];	// -addr= + <addr>.
 	char buf_port[6 + 6];					// -port= + <port> + \0.
+	char buf_nproc[7 + 10 + 1];				// -nproc= + <nproc> + \0.
 
 	// Configure argument buffers.
 	sprintf(buf_sid, "-sid=%s", sid);
 	sprintf(buf_addr, "-addr=%s", address);
 	sprintf(buf_port, "-port=%s", port);
+	sprintf(buf_nproc, "-nproc=%d", nproc);
 
 	// Set program arguments.
 	argv[0] = filename;
 	argv[1] = buf_addr;
 	argv[2] = buf_port;
 	argv[3] = buf_sid;
-	argv[4] = NULL;
+	argv[4] = buf_nproc;
+	argv[5] = NULL;
 
 	// Exec the session server.
 	execve(filename, argv, NULL);
@@ -311,10 +253,7 @@ static void processConnection (int sock_listen) {
 	}
 
 	// Register connection in pollable descriptor list.
-	if (setPollable(sock_new, POLLIN) == -1) {
-		dsm_warning("Maximum pollable limit hit. Rejected connection!");
-		close(sock_new);
-	}
+	dsm_setPollable(sock_new, POLLIN, pollableSet);
 }
 
 
@@ -331,9 +270,10 @@ static void processMessage (int fd) {
 	printf("[%d] Received!\n", getpid());
 
 	// Determine action based on message type.
-	if ((action = dsm_getMsgFunction(msg.type)) == NULL) {
+	if ((action = dsm_getMsgFunc(msg.type, fmap)) == NULL) {
 		dsm_warning("No action for message type!");
-		removePollable(fd);
+		dsm_removePollable(fd, pollableSet);
+		close(fd);
 		return;
 	}
 
@@ -353,10 +293,13 @@ int main (int argc, const char *argv[]) {
 	int new = 0;								// New count.
 	struct pollfd *pfd;							// Pointer to poll structure.
 
+	// Initialize pollable set.
+	pollableSet = dsm_initPollSet(DSM_MIN_POLLABLE);
+
 	// Register message functions.
-	if (dsm_setMsgFunction (GET_SESSION, msg_getSession) != 0 ||
-		dsm_setMsgFunction (SET_SESSION, msg_setSession) != 0 ||
-		dsm_setMsgFunction (DEL_SESSION, msg_delSession) != 0) {
+	if (dsm_setMsgFunc(MSG_GET_SESSION, msg_getSession, fmap) != 0 ||
+		dsm_setMsgFunc(MSG_SET_SESSION, msg_setSession, fmap) != 0 ||
+		dsm_setMsgFunc(MSG_DEL_SESSION, msg_delSession, fmap) != 0) {
 		dsm_cpanic("Couldn't set message functions!", "Unknown");
 	}
 
@@ -370,17 +313,17 @@ int main (int argc, const char *argv[]) {
 	}
 
 	// Register as a pollable socket.
-	setPollable(sock_listen, POLLIN);
+	dsm_setPollable(sock_listen, POLLIN, pollableSet);
 
 	printf("[%d] Server is ready...\n", getpid());
 
 	// Poll as long as no error occurs.
-	while ((new = poll(pollfds, npollfds, -1)) != -1) {
+	while ((new = poll(pollableSet->fds, pollableSet->fp, -1)) != -1) {
 		
-		for (int i = 0; i < npollfds; i++) {
-			pfd = pollfds + i;
+		for (int i = 0; i < pollableSet->fp; i++) {
+			pfd = pollableSet->fds + i;
 			
-			// Only check if there is data to read.
+			// If nothing to read, ignore file-descriptor.
 			if ((pfd->revents & POLLIN) == 0) {
 				continue;
 			}
@@ -396,7 +339,7 @@ int main (int argc, const char *argv[]) {
 		}
 
 		printf("[%d] New State:\n", getpid());
-		showPollable();
+		dsm_showPollable(pollableSet);
 		dsm_showTable();
 		putchar('\n');
 	}
@@ -406,4 +349,7 @@ int main (int argc, const char *argv[]) {
 
 	// Close listener socket.
 	close(sock_listen);
+
+	// Free pollable set.
+	dsm_freePollSet(pollableSet);
 }

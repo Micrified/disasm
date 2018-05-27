@@ -43,7 +43,7 @@ static unsigned int DJBHash (const char *s, size_t length) {
 }
 
 // [ALLOC] Creates a new dsm_session instance. Returns pointer.
-static dsm_session *newTableEntry (const char *sid, int port, 
+static dsm_session *newTableEntry (const char *sid, int port, int nproc,
 	dsm_session *next) {
 	dsm_session *entry;
 
@@ -58,6 +58,7 @@ static dsm_session *newTableEntry (const char *sid, int port,
 	entry->sid[DSM_SID_SIZE] = '\0';
 	entry->qp = 0;
 	entry->port = port;
+	entry->nproc = nproc;
 	entry->next = next;
 
 	// Return pointer.
@@ -67,7 +68,7 @@ static dsm_session *newTableEntry (const char *sid, int port,
 // [DEBUG] Prints a linked list of dsm_session objects to stdout.
 static void printList (dsm_session *p) {
 	while (p != NULL) {
-		printf("[\"%s\" | %d | {", p->sid, p->port);
+		printf("[\"%s\" | port: %d | nproc: %d | {", p->sid, p->port, p->nproc);
 		for (int i = 0; i < p->qp; i++) {
 			printf("%d", p->queue[i]);
 			if (i < (p->qp - 1)) {
@@ -148,14 +149,14 @@ dsm_session *dsm_getTableEntry (const char *sid) {
 }
 
 // Creates table entry with session information. Returns NULL on error.
-dsm_session *dsm_newTableEntry (const char *sid, int port) {
+dsm_session *dsm_newTableEntry (const char *sid, int port, int nproc) {
 	unsigned int i;
 
 	// Compute index.
 	i = (DJBHash(sid, DSM_SID_SIZE) % DSM_TAB_SIZE);
 
 	// Set head of list to new entry.
-	table[i] = newTableEntry(sid, port, table[i]);
+	table[i] = newTableEntry(sid, port, nproc, table[i]);
 
 	// Return pointer to entry.
 	return table[i];

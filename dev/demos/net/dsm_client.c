@@ -35,12 +35,14 @@ int main (void) {
 
 	// Design a payload.
 	memset(&msg, 0, sizeof(msg));
-	msg.type = GET_SESSION;
-	sprintf(msg.sid, "%.*s", DSM_SID_SIZE, sid);
+	msg.type = MSG_GET_SESSION;
+	sprintf(msg.payload.get.sid, "%.*s", DSM_SID_SIZE, sid);
+	msg.payload.get.nproc = 5;
 
 	printf("Payload is ready to go:\n");
 	printf("msg.type = %d\n", msg.type);
-	printf("msg.sid = \"%s\"\n", msg.sid);
+	printf("msg.payload.get.sid = \"%s\"\n", msg.payload.get.sid);
+	printf("msg.payload.get.nproc = %u\n", msg.payload.get.nproc);
 	printf("(size = %zu)\n", sizeof(msg));
 
 	char proceed;
@@ -58,7 +60,7 @@ int main (void) {
 	printf("Received a response!\n");
 
 	// Print the response.
-	printf("Should connect to port: %u\n", msg.port);
+	printf("Should connect to port: %u\n", msg.payload.set.port);
 
 	// Close the socket.
 	close(s);

@@ -1,47 +1,34 @@
 #include <stdlib.h>
 #include "dsm_msg.h"
 
-
-/*
- *******************************************************************************
- *                              Global Variables                               *
- *******************************************************************************
-*/
-
-
-// Function Table.
-void (*fmap[256])(int, dsm_msg *);
-
-
 /*
  *******************************************************************************
  *                            Function Definitions                             *
  *******************************************************************************
 */
 
-
 // Links function to given message type. Returns nonzero on error.
-int dsm_setMsgFunction (dsm_msg_t type, void (*f)(int, dsm_msg *)) {
-
-	// Verify value in range.
-	if (type < MIN_MSG_VAL || type > MAX_MSG_VAL) {
+int dsm_setMsgFunc (dsm_msg_t type, dsm_msg_func func, dsm_msg_func *fmap) {
+	
+	// Verify message type.
+	if (type < MSG_MIN_VALUE || type > MSG_MAX_VALUE) {
 		return -1;
 	}
 
-	// Install function pointer in table.
-	fmap[type] = f;
+	// Install function pointer.
+	fmap[type] = func;
 
 	return 0;
 }
 
-// Returns function linked with given message type. Returns NULL on error.
-void (*dsm_getMsgFunction (dsm_msg_t type))(int, dsm_msg *) {
+// Returns function for given message type. Returns NULL on error.
+dsm_msg_func dsm_getMsgFunc (dsm_msg_t type, dsm_msg_func *fmap) {
 
-	// Verify value in range.
-	if (type < MIN_MSG_VAL || type > MAX_MSG_VAL) {
+	// Verify message type.
+	if (type < MSG_MIN_VALUE || type > MSG_MAX_VALUE) {
 		return NULL;
 	}
 
-	// Return function pointer in table.
+	// Return function pointer.
 	return fmap[type];
 }

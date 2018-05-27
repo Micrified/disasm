@@ -26,6 +26,7 @@ typedef struct dsm_session {
 	int queue[DSM_MAX_SESSION_QUEUE];	// Queue of waiting file-descriptors.
 	unsigned int qp;					// Queue pointer.
 	int port;							// Session port.
+	int nproc;							// Number of expected processes.
 	struct dsm_session *next;			// Linked session.
 } dsm_session;
 
@@ -44,7 +45,7 @@ void dsm_showTable (void);
 dsm_session *dsm_getTableEntry (const char *sid);
 
 // Creates table entry with session information. Returns NULL on error.
-dsm_session *dsm_newTableEntry (const char *sid, int port);
+dsm_session *dsm_newTableEntry (const char *sid, int port, int nproc);
 
 // Removes the table entry for the given process SID. Returns nonzero on error.
 int dsm_removeTableEntry (const char *sid);

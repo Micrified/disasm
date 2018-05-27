@@ -28,8 +28,12 @@
 // Minimum number of concurrent pollable connections.
 #define DSM_MIN_POLLABLE		32
 
+// Minimum number of queuable operation requests.
+#define DSM_MIN_OPQUEUE_SIZE	32
+
 // Usage format.
-#define DSM_ARG_FMT	"[-sid= <session-id> -addr=<address> -port=<port>]"
+#define DSM_ARG_FMT	"[-sid= <session-id> -addr=<address> -port=<port>"\
+					" -nproc=<nproc>]"
 
 
 /*
@@ -38,12 +42,58 @@
  *******************************************************************************
 */
 
+// Boolean flag indicating if program should continue polling.
+int alive = 1;
 
 // Pollable file-descriptor set.
 pollset *pollableSet;
 
+// Function map.
+dsm_msg_func fmap[MSG_MAX_VALUE];
+
+// Operation queue (current write state, who wants to write next, etc).
+dsm_opqueue *opqueue;
+
+// The total number of participant processes.
+unsigned int nproc;
+
+// The number of stopped processes.
+unsigned int nproc_stopped;
+
+// The number of updated processes.
+unsigned int nproc_synced;
+
 // The listener socket.
 int sock_listen;
+
+
+/*
+ *******************************************************************************
+ *                            Function Declarations                            *
+ *******************************************************************************
+*/
+
+
+// Allocates and initializes an operation-queue.
+static dsm_opqueue *initOpQueue (size_t queueSize);
+
+// Free's given operation-queue.
+static void freeOpQueue (dsm_opqueue *oq);
+
+// Returns true (1) if the given operation-queue is empty.
+static int isOpQueueEmpty (dsm_opqueue *oq);
+
+// Returns tail of operation-queue. Exits fatally on error.
+static int getQueueTail (dsm_opqueue *oq);
+
+// Enqueues file-descriptor in operation-queue for write. Resizes if needed.
+static void enqueueOperation (int fd, dsm_opqueue *oq);
+
+// Dequeues file-descriptor from operation queue. Panics on error.
+static int dequeueOperation (dsm_opqueue *oq);
+
+// Prints the operation-queue.
+static void showOpQueue (dsm_opqueue *oq);
 
 
 /*
@@ -61,14 +111,14 @@ static void send_setSession (const char *sid, const char *addr,
 		
 	// Configure message.
 	memset(&msg, 0, sizeof(msg));
-	msg.type = SET_SESSION;
-	sprintf(msg.sid, "%.*s", DSM_SID_SIZE, sid);
+	msg.type = MSG_SET_SESSION;
+	sprintf(msg.payload.set.sid, "%.*s", DSM_SID_SIZE, sid);
 
 	// Set message port to current port.
-	dsm_getSocketInfo(sock_listen, NULL, 0, &msg.port);
+	dsm_getSocketInfo(sock_listen, NULL, 0, &msg.payload.set.port);
 
-	printf("[%d] Sending: TYPE = %u, SID = \"%s\", PORT= %u\n", getpid(), msg.type,
-		msg.sid, msg.port); 
+	printf("[%d] Sending: TYPE = %u, SID = \"%s\", PORT= %u\n", getpid(),
+		msg.type, msg.payload.set.sid, msg.payload.set.port);
 
 	// Open socket.
 	s = dsm_getConnectedSocket(addr, port);
@@ -88,8 +138,8 @@ static void send_delSession (const char *sid, const char *addr,
 
 	// Configure message.
 	memset(&msg, 0, sizeof(msg));
-	msg.type = DEL_SESSION;
-	sprintf(msg.sid, "%.*s", DSM_SID_SIZE, sid);
+	msg.type = MSG_DEL_SESSION;
+	sprintf(msg.payload.del.sid, "%.*s", DSM_SID_SIZE, sid);
 
 	// Open socket.
 	s = dsm_getConnectedSocket(addr, port);
@@ -101,6 +151,152 @@ static void send_delSession (const char *sid, const char *addr,
 	close(s);
 }
 
+// Sends basic message 'type' to fd. If fd == -1, sends to all file-descriptors.
+static void send_simpleMsg (int fd, dsm_msg_t type) {
+	dsm_msg msg;
+
+	// Configure message.
+	memset(&msg, 0, sizeof(msg));
+	msg.type = type;
+
+	// If fd is non-negative, send just to fd.
+	if (fd >= 0) {
+		dsm_sendall(fd, &msg, sizeof(msg));
+		return;
+	}
+
+	// Otherwise, send to all (skip listener socket at index 0).
+	for (int i = 1; i < pollableSet->fp; i++) {
+		dsm_sendall(pollableSet->fds[i].fd, &msg, sizeof(msg));
+	}
+}
+
+/*
+ *******************************************************************************
+ *                          Message Handler Functions                          *
+ *******************************************************************************
+*/
+
+// Message requesting write access.
+static void msg_syncRequest (int fd, dsm_msg *mp) {
+
+	// Queue request.
+	enqueueOperation(fd, opqueue);
+
+	// If no other operation in progress, send stop instruction and set step.
+	if (getQueueTail(opqueue) == fd) {
+
+		// Assert current step is STEP_READY.
+		if (opqueue->step != STEP_READY) {
+			dsm_cpanic("msg_syncRequest", "Inconsistent internal state!");
+		}
+
+		// Send message to stop, advance to next step.
+		send_simpleMsg(-1, MSG_STOP_ALL);
+		opqueue->step = STEP_WAITING_STOP_ACK;
+	}
+}
+
+// Message indicating given machine has stopped all it's processes.
+static void msg_stopDone (int fd, dsm_msg *mp) {
+	dsm_msg_done data = mp->payload.done;
+
+	// Verify message is appropriate.
+	if (opqueue->step != STEP_WAITING_STOP_ACK) {
+		dsm_cpanic("msg_stopDone", "Received out of order message!");
+	}
+
+	// If (n-1) processes have stopped: Inform writer, advance to next step.
+	printf("[%d] Received MSG_STOP_DONE (%d/%d needed)\n", getpid(), nproc_stopped + data.nproc, nproc);
+	if ((nproc_stopped += data.nproc) >= (nproc - 1)) {
+
+		// Ensure writer exists.
+		if (isOpQueueEmpty(opqueue)) {
+			dsm_cpanic("msg_didStop", "Message to nonexistant writer!");
+		}
+
+		// Inform writer, increment step, reset stopped count.
+		send_simpleMsg(getQueueTail(opqueue), MSG_WRITE_OKAY);
+		opqueue->step = STEP_WAITING_SYNC_INFO;
+		nproc_stopped = 0;
+	}
+}
+
+// Message providing sychronization specifics.
+static void msg_syncInfo (int fd, dsm_msg *mp) {
+
+	// Verify message is appropriate.
+	if (opqueue->step != STEP_WAITING_SYNC_INFO) {
+		dsm_cpanic("msg_syncStart", "Received out of order message!");
+	}
+
+	// Verify sender is current writer.
+	if (isOpQueueEmpty(opqueue) || getQueueTail(opqueue) != fd) {
+		dsm_cpanic("msg_syncStart", "Sender is not current writer!");
+	}
+
+	printf("[%d] Received MSG_SYNC_INFO! Forwarding to all others!\n", getpid());
+
+	// Forward to all file-descriptors except writer.
+	for (int i = 1; i < pollableSet->fp; i++) {
+		if (pollableSet->fds[i].fd != fd) {
+			dsm_sendall(pollableSet->fds[i].fd, mp, sizeof(*mp));
+		}
+	}
+
+	// Set state to next step.
+	opqueue->step = STEP_WAITING_SYNC_ACK;
+}
+
+// Message indicating data was received.
+static void msg_syncDone (int fd, dsm_msg *mp) {
+	dsm_msg_done data = mp->payload.done;
+
+	// Verify message is appropriate.
+	if (opqueue->step != STEP_WAITING_SYNC_ACK) {
+		dsm_cpanic("msg_syncDone", "Received out of order message!");
+	}
+	
+	printf("[%d] Received MSG_SYNC_DONE!\n", getpid());
+
+	// If (n-1) processes have updated. Check queue for new write, or continue.
+	if ((nproc_synced += data.nproc) >= (nproc - 1)) {
+
+		// Dequeue completed write-operation.
+		dequeueOperation(opqueue);
+
+		// Reset counter.
+		nproc_synced = 0;
+
+		// Check if another write is pending. Go to step 2. Inform writer.
+		if (!isOpQueueEmpty(opqueue)) {
+			printf("[%d] Another operation is waiting, doing it next!\n", getpid());
+			opqueue->step = STEP_WAITING_SYNC_INFO;
+			send_simpleMsg(getQueueTail(opqueue), MSG_WRITE_OKAY);
+			return;
+		}
+
+		printf("[%d] Informing all participants to continue!\n", getpid());
+		
+		// Inform all processes to continue.
+		send_simpleMsg(-1, MSG_CONT_ALL);
+
+		// Reset step to ready.
+		opqueue->step = STEP_READY;
+	}
+}
+
+// Message indicating arbiter is exiting.
+static void msg_prgmDone (int fd, dsm_msg *mp) {
+
+	// Close connection, remove from pollable set.
+	dsm_removePollable(fd, pollableSet);
+	close(fd);
+
+	// If no more connections remain, destroy session.
+	alive = (pollableSet->fp > 1);
+}
+
 
 /*
  *******************************************************************************
@@ -108,6 +304,116 @@ static void send_delSession (const char *sid, const char *addr,
  *******************************************************************************
 */
 
+// Allocates and initializes an operation-queue.
+static dsm_opqueue *initOpQueue (size_t queueSize) {
+	dsm_opqueue *oq;
+
+	// Allocate opqueue.
+	if ((oq = malloc(sizeof(dsm_opqueue))) == NULL) {
+		dsm_cpanic("initOpQueue failed!", "Allocation error");
+	}
+
+	// Set queue itself.
+	if ((oq->queue = malloc(queueSize * sizeof(int))) == NULL) {
+		dsm_cpanic("initOpQueue failed!", "Allocation error");
+	}
+
+	// Set remaining fields.
+	oq->step = STEP_READY;
+	oq->queueSize = queueSize;
+	oq->head = oq->tail = 0;
+
+	return oq;
+}
+
+// Free's given operation-queue.
+static void freeOpQueue (dsm_opqueue *oq) {
+	if (oq == NULL) {
+		return;
+	}
+	free(oq->queue);
+	free(oq);
+}
+
+// Returns true (1) if the given operation-queue is empty.
+static int isOpQueueEmpty (dsm_opqueue *oq) {
+	return (oq->head == oq->tail);
+}
+
+// Returns tail of operation-queue. Exits fatally on error.
+static int getQueueTail (dsm_opqueue *oq) {
+	if (isOpQueueEmpty(oq) == 1) {
+		dsm_cpanic("getQueueTail", "Can't get tail of empty queue!");
+	}
+	return oq->queue[oq->tail];
+}
+
+// Enqueues file-descriptor in operation-queue for write. Resizes if needed.
+static void enqueueOperation (int fd, dsm_opqueue *oq) {
+	size_t new_queueSize;
+	int i, j, *new_queue;
+
+	// Resize queue if full.
+	if ((oq->head + 1) % oq->queueSize == oq->tail) {
+
+		// Double queue size.
+		new_queueSize = 2 * oq->queueSize;
+
+		// Allocate the new queue.
+		if ((new_queue = malloc(new_queueSize * sizeof(int))) == NULL) {
+			dsm_cpanic("enqueueOperation", "Couldn't resize queue");
+		}
+
+		// Copy over the data.
+		for (i = oq->tail, j = 0; i != oq->head; 
+			i = (i + 1) % oq->queueSize, j++) {
+			new_queue[j] = oq->queue[i];
+		}
+
+		// Free the old queue and replace it.
+		free(oq->queue);
+		oq->queue = new_queue;
+
+		// Set the size, new head and tail.
+		oq->queueSize = new_queueSize;
+		oq->head = j;
+		oq->tail = 0;
+	}
+
+	// Enroll item.
+	oq->queue[oq->head] = fd;
+	oq->head = (oq->head + 1) % oq->queueSize;
+}
+
+// Dequeues file-descriptor from operation queue. Panics on error.
+static int dequeueOperation (dsm_opqueue *oq) {
+	int val;
+
+	// Error out if queue is empty.
+	if (oq->tail == oq->head) {
+		dsm_cpanic("dequeueOperation", "Can't dequeue from empty!");
+	}
+
+	// Extract value, move tail up, then return value.
+	val = oq->queue[oq->tail];
+	oq->tail = (oq->tail + 1) % oq->queueSize;
+	return val;
+}
+
+// Prints the operation-queue.
+static void showOpQueue (dsm_opqueue *oq) {
+	printf("oq->step = %d\n", oq->step);
+	printf("oq->queueSize = %zu\n", oq->queueSize);
+	printf("oq->head = %u, oq->tail = %u\n", oq->head, oq->tail);
+	printf("oq->queue = [");
+	for (int i = 0; i < oq->queueSize; i++) {
+		printf("%d", oq->queue[i]);
+		if (i < (oq->queueSize - 1)) {
+			putchar(',');
+		}
+	}
+	printf("]\n");
+}
 
 // Returns length of match if substring is accepted. Otherwise returns zero.
 static int acceptSubstring (const char *substr, const char *str) {
@@ -119,12 +425,12 @@ static int acceptSubstring (const char *substr, const char *str) {
 
 // Parses arguments and sets pointers. Returns nonzero if full args given.
 static int parseArgs (int argc, const char *argv[], const char **sid_p, 
-	const char **addr_p, const char **port_p) {
+	const char **addr_p, const char **port_p, unsigned int *nproc_p) {
 	const char *arg;
 	int n;
 
 	// Verify argument count.
-	if (argc != 1 && argc != 4) {
+	if (argc != 1 && argc != 5) {
 		dsm_panicf("Bad arg count (%d). Format is: " DSM_ARG_FMT, argc);
 	}
 
@@ -147,13 +453,58 @@ static int parseArgs (int argc, const char *argv[], const char **sid_p,
 			continue;
 		}
 
+		if (*nproc_p == -1 && (n = acceptSubstring("-nproc=", arg)) != 0) {
+			if (sscanf(arg + n, "%u", nproc_p) == 1) {
+				continue;
+			}
+		}
+
 		dsm_panicf("Unknown/duplicate argument: \"%s\". Format is: "
 			DSM_ARG_FMT, arg);
 	}
 
-	return (*sid_p != NULL && *addr_p != NULL && *port_p != NULL);
+	return (*sid_p && *addr_p && *port_p && *nproc_p != -1);
 }
 
+// Accepts incoming connection, and updates the list of pollable descriptors.
+static void processConnection (int sock_listen) {
+	struct sockaddr_storage newAddr;
+	socklen_t newAddrSize = sizeof(newAddr);
+	int sock_new;
+
+	// Try accepting connection.
+	if ((sock_new = accept(sock_listen, (struct sockaddr *)&newAddr, 
+		&newAddrSize)) == -1) {
+		dsm_panic("Couldn't accept connection!");
+	}
+
+	// Register connection in pollable descriptor list.
+	dsm_setPollable(sock_new, POLLIN, pollableSet);
+}
+
+// Reads message from fd. Decodes and dispatches response. Then disconnects.
+static void processMessage (int fd) {
+	dsm_msg msg;
+	void (*action)(int, dsm_msg *);
+	
+	printf("[%d] Receiving message...\n", getpid());
+
+	// Read in message.
+	dsm_recvall(fd, &msg, sizeof(msg));
+
+	printf("[%d] Received!\n", getpid());
+
+	// Determine action based on message type.
+	if ((action = dsm_getMsgFunc(msg.type, fmap)) == NULL) {
+		dsm_warning("No action for message type!");
+		dsm_removePollable(fd, pollableSet);
+		close(fd);
+		return;
+	}
+
+	// Execute action.
+	action(fd, &msg);
+}
 
 /*
  *******************************************************************************
@@ -163,21 +514,40 @@ static int parseArgs (int argc, const char *argv[], const char **sid_p,
 
 
 int main (int argc, const char *argv[]) {
+	int new = 0;							// New count (for poll syscall).
 	int withDaemon = 0;						// Boolean (should contact daemon?)
 	const char *sid = NULL;					// Session-identifier.
 	const char *addr = NULL;				// Daemon address.
 	const char *port = NULL;				// Daemon port.
+	struct pollfd *pfd;						// Pointer to poll structure.
+
+	printf("sid = %s\n", sid);
+	printf("addr = %s\n", addr);
+	printf("port = %s\n", port);
+	printf("nproc = %u\n", nproc);
+	
+	// ------------------------------ Setup -----------------------------------
 
 	// Verify and parse arguments.
-	withDaemon = parseArgs(argc, argv, &sid, &addr, &port);
+	withDaemon = parseArgs(argc, argv, &sid, &addr, &port, &nproc);
+
+	// Set functions.
+	if (dsm_setMsgFunc(MSG_SYNC_REQ, msg_syncRequest, fmap) != 0 ||
+		dsm_setMsgFunc(MSG_STOP_DONE, msg_stopDone, fmap) != 0 ||
+		dsm_setMsgFunc(MSG_SYNC_INFO, msg_syncInfo, fmap) != 0 ||
+		dsm_setMsgFunc(MSG_SYNC_DONE, msg_syncDone, fmap) != 0 ||
+		dsm_setMsgFunc(MSG_PRGM_DONE, msg_prgmDone, fmap) != 0) {
+		dsm_cpanic("Couldn't set message functions!", "Unknown");
+	}
 
 	// Initialize pollable-set.
 	pollableSet = dsm_initPollSet(DSM_MIN_POLLABLE);
 
+	// Initialize operation-queue.
+	opqueue = initOpQueue(DSM_MIN_OPQUEUE_SIZE);
+
 	// Setup listener socket: Any port.
 	sock_listen = dsm_getBoundSocket(AI_PASSIVE, AF_UNSPEC, SOCK_STREAM, "0");
-
-	dsm_showSocketInfo(sock_listen);
 
 	// Listen on socket.
 	if (listen(sock_listen, DSM_DEF_BACKLOG) == -1) {
@@ -186,18 +556,45 @@ int main (int argc, const char *argv[]) {
 
 	// Set listener socket as pollable.
 	dsm_setPollable(sock_listen, POLLIN, pollableSet);
+	
 
-	dsm_showPollable(pollableSet);
+	// ----------------------------- Main Body ----------------------------------
 	
 	// If daemon details provided, dispatch update message.
 	if (withDaemon != 0) {
 		send_setSession(sid, addr, port);
 	}
 
-	char c;
-	printf("Would you like to destroy the session now?\n");
-	scanf("%c", &c);
+	// Poll while no errors and no exit 
+	while (alive && (new = poll(pollableSet->fds, pollableSet->fp,-1)) != -1) {
+		
+		for (int i = 0; i < pollableSet->fp; i++) {
+			pfd = pollableSet->fds + i;
 
+			// If nothing to read, ignore file-descriptor.
+			if ((pfd->revents & POLLIN) == 0) {
+				continue;
+			}
+
+			// If listenr socket: Accept connection.
+			if (pfd->fd == sock_listen) {
+				processConnection(sock_listen);
+			} else {
+				printf("[%d] New Message!\n", getpid());
+				processMessage(pfd->fd);
+			}
+		}
+
+		printf("[%d] State Update:\n", getpid());
+		dsm_showPollable(pollableSet);
+		showOpQueue(opqueue);
+		putchar('\n');
+	}
+	
+
+	// ----------------------------- Clean up ----------------------------------
+
+	// If daemon details provided, dispatch destroy message.
 	if (withDaemon != 0) {
 		send_delSession(sid, addr, port);
 	}
@@ -207,6 +604,9 @@ int main (int argc, const char *argv[]) {
 
 	// Close listener socket.
 	close(sock_listen);
+
+	// Free operation-queue.
+	freeOpQueue(opqueue);
 
 	// Free pollable set.
 	dsm_freePollSet(pollableSet);
