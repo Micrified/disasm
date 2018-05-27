@@ -162,7 +162,7 @@ static void msg_setSession (int fd, dsm_msg *mp) {
 	// Notify and close queued file-descriptors.
 	while (dsm_dequeueTableEntryFD(&waiting_fd, entry) == 0) {
 		send_getSessionReply(waiting_fd, entry->port);
-		dsm_removePollable(fd, pollableSet);
+		dsm_removePollable(waiting_fd, pollableSet);
 		close(waiting_fd);
 	}
 
