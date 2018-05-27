@@ -32,8 +32,8 @@
 #define DSM_MIN_OPQUEUE_SIZE	32
 
 // Usage format.
-#define DSM_ARG_FMT	"[-sid= <session-id> -addr=<address> -port=<port>"\
-					" -nproc=<nproc>]"
+#define DSM_ARG_FMT	"-nproc=<nproc> [-sid= <session-id> -addr=<address>"\
+					"-port=<port>]"
 
 
 /*
@@ -55,7 +55,7 @@ dsm_msg_func fmap[MSG_MAX_VALUE];
 dsm_opqueue *opqueue;
 
 // The total number of participant processes.
-unsigned int nproc;
+unsigned int nproc = -1;
 
 // The number of stopped processes.
 unsigned int nproc_stopped;
@@ -430,7 +430,7 @@ static int parseArgs (int argc, const char *argv[], const char **sid_p,
 	int n;
 
 	// Verify argument count.
-	if (argc != 1 && argc != 5) {
+	if (argc != 2 && argc != 5) {
 		dsm_panicf("Bad arg count (%d). Format is: " DSM_ARG_FMT, argc);
 	}
 
@@ -461,6 +461,11 @@ static int parseArgs (int argc, const char *argv[], const char **sid_p,
 
 		dsm_panicf("Unknown/duplicate argument: \"%s\". Format is: "
 			DSM_ARG_FMT, arg);
+	}
+
+	// Ensure -nproc wasn't optional.
+	if (*nproc_p == -1) {
+		dsm_panicf("Required argument missing \"-nproc=<nproc>\"");
 	}
 
 	return (*sid_p && *addr_p && *port_p && *nproc_p != -1);
@@ -520,11 +525,6 @@ int main (int argc, const char *argv[]) {
 	const char *addr = NULL;				// Daemon address.
 	const char *port = NULL;				// Daemon port.
 	struct pollfd *pfd;						// Pointer to poll structure.
-
-	printf("sid = %s\n", sid);
-	printf("addr = %s\n", addr);
-	printf("port = %s\n", port);
-	printf("nproc = %u\n", nproc);
 	
 	// ------------------------------ Setup -----------------------------------
 
@@ -556,6 +556,12 @@ int main (int argc, const char *argv[]) {
 
 	// Set listener socket as pollable.
 	dsm_setPollable(sock_listen, POLLIN, pollableSet);
+
+	printf("Server setup complete: "); dsm_showSocketInfo(sock_listen);
+	printf("sid = %s\n", sid);
+	printf("addr = %s\n", addr);
+	printf("port = %s\n", port);
+	printf("nproc = %u\n", nproc);
 	
 
 	// ----------------------------- Main Body ----------------------------------
@@ -566,7 +572,7 @@ int main (int argc, const char *argv[]) {
 	}
 
 	// Poll while no errors and no exit 
-	while (alive && (new = poll(pollableSet->fds, pollableSet->fp,-1)) != -1) {
+	while (alive && (new = poll(pollableSet->fds, pollableSet->fp, -1)) != -1) {
 		
 		for (int i = 0; i < pollableSet->fp; i++) {
 			pfd = pollableSet->fds + i;

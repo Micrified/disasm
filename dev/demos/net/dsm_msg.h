@@ -94,6 +94,9 @@ int dsm_setMsgFunc (dsm_msg_t type, dsm_msg_func func, dsm_msg_func *fmap);
 // Returns function for given message type. Returns NULL on error.
 dsm_msg_func dsm_getMsgFunc (dsm_msg_t type, dsm_msg_func *fmap);
 
+// Prints the contents of a message, depending on it's type.
+void dsm_showMsg (dsm_msg *mp);
+
 
 
 #endif

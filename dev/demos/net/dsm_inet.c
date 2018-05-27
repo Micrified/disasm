@@ -156,14 +156,14 @@ void dsm_getSocketInfo (int s, char *addr_buf, size_t buf_size,
 		family = ipv4->sin_family;
 		addr = &(ipv4->sin_addr);
 		if (port != NULL) {
-			*port = ipv4->sin_port;
+			*port = ntohs(ipv4->sin_port);
 		}
 	} else {
 		struct sockaddr_in6 *ipv6 = (struct sockaddr_in6 *)&addrinfo;
 		family = ipv6->sin6_family;
 		addr = &(ipv6->sin6_addr);
 		if (port != NULL) {
-			*port = ipv6->sin6_port;
+			*port = ntohs(ipv6->sin6_port);
 		}
 	}
 
