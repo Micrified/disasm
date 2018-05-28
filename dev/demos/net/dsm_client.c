@@ -53,6 +53,11 @@ void configMsg (int i, dsm_msg *mp) {
 			break;
 		}
 		case 6: {
+			mp->type = MSG_WAIT_BARR;
+			mp->payload.barr.nproc = 1;
+			break;
+		}
+		case 7: {
 			mp->type = MSG_GET_SESSION;
 			printf("SID: ");
 			scanf("%s", mp->payload.get.sid);
@@ -107,20 +112,22 @@ unsigned int getInput (void) {
 
 	do {
 		printf("Select the message to send:\n");
+
 		printf("\tSERVER-REQUESTS\n");
 		printf("\t\"1\" = Request to write.\n");
 		printf("\t\"2\" = Have stopped.\n");
 		printf("\t\"3\" = Sync done.\n");
 		printf("\t\"4\" = Exiting.\n");
 		printf("\t\"5\" = Sync info (dummy).\n");
-		
+		printf("\t\"6\" = Wait on barrier.\n");
+
 		printf("\tDAEMON-REQUESTS\n");
-		printf("\t\"6\" = Get session.\n");
+		printf("\t\"7\" = Get session.\n");
 		printf("\tOTHER\n");
-		printf("\n\t\"7\" = Read Response.\n");
+		printf("\n\t\"8\" = Read Response.\n");
 		printf("Input: ");
 		scanf("%u", &input);
-	} while (input < 0 && input > 8);
+	} while (input > 9);
 
 	return input;
 }
@@ -128,8 +135,6 @@ unsigned int getInput (void) {
 int main (int argc, const char *argv[]) {
 	const char *server_addr = "127.0.0.1";
 	const char *server_port;
-	const char *sid = "arethusa";
-	dsm_msg msg;
 
 	if (argc != 2) {
 		printf("Usage: ./client <port>\n");
@@ -146,7 +151,7 @@ int main (int argc, const char *argv[]) {
 	while (1) {
 		unsigned int i = getInput();
 
-		if (i == 7) {
+		if (i == 8) {
 			getReply(s);
 		} else {
 			sendMsg(i, s);

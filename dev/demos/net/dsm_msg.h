@@ -21,6 +21,7 @@ typedef enum {
 
 	MSG_STOP_ALL,						// [S->A] Arbiter must suspend proc's.
 	MSG_CONT_ALL,						// [S->A] Arbiter may resume proc's.
+	MSG_WAIT_DONE,						// [S->A] Arbiter can release barrier.
 	MSG_WRITE_OKAY,						// [S->A] Arbiter may write.
 
 	MSG_SYNC_REQ,						// [A->S] Arbiter asks for write perms.

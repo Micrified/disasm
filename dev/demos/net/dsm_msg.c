@@ -63,6 +63,10 @@ void dsm_showMsg(dsm_msg *mp) {
 			printf("TYPE: MSG_CONT_ALL\n");
 			break;
 		}
+		case MSG_WAIT_DONE: {
+			printf("TYPE: MSG_WAIT_DONE\n");
+			break;
+		}
 		case MSG_WRITE_OKAY: {
 			printf("TYPE: MSG_WRITE_OKAY\n");
 			break;
@@ -73,7 +77,7 @@ void dsm_showMsg(dsm_msg *mp) {
 		}
 		case MSG_SYNC_INFO: {
 			printf("TYPE: MSG_SYNC_INFO\n");
-			printf("OFFSET: %zu\n", mp->payload.sync.offset);
+			printf("OFFSET: %lld\n", mp->payload.sync.offset);
 			printf("SIZE: %zu\n", mp->payload.sync.size);
 			break;
 		}
@@ -85,6 +89,11 @@ void dsm_showMsg(dsm_msg *mp) {
 		case MSG_SYNC_DONE: {
 			printf("TYPE: MSG_SYNC_DONE\n");
 			printf("NPROC: %u\n", mp->payload.done.nproc);
+			break;
+		}
+		case MSG_WAIT_BARR: {
+			printf("TYPE: MSG_WAIT_BARR\n");
+			printf("NPROC: %u\n", mp->payload.barr.nproc);
 			break;
 		}
 		case MSG_PRGM_DONE: {

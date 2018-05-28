@@ -61,7 +61,7 @@ unsigned int nproc = -1;
 unsigned int nproc_stopped;
 
 // The number of waiting processes (barrier).
-unsigned it nproc_waiting;
+unsigned int nproc_waiting;
 
 // The number of updated processes.
 unsigned int nproc_synced;
@@ -293,33 +293,18 @@ static void msg_syncDone (int fd, dsm_msg *mp) {
 static void msg_waitBarr (int fd, dsm_msg *mp) {
 	dsm_msg_barr data = mp->payload.barr;
 
-	// Verify that sender isn't also currently writing (makes no sense).
-	if (isOpQueueEmpty(opqueue) == 0 && fd == getQueueTail(opqueue)) {
-		dsm_cpanic("Inconsistency found!", "Can't send barrier message 
-	}
-	if (nproc_waiting != 0 
-	
-	// Verify there are no ongoing write operations.
-	if (opqueue->step != STEP_READY) {
+	// Verify that sender isn't also currently writing (unable).
 
-		// Sanity check: If set to ready, queue must be empty.
-		if (isOpQueueEmpty(opqueue) == 0) {
-			dsm_cpanic("Inconsistency found!", "(ready-state ^ queued op!)");
-		}
-		
-		dsm_cpanic("Illegal request", "Cannot perform barrier during write!");
-	}
-
-	// If all processes have stopped, release and reset barrier.
-	if ((dsm_stopped += data.nproc) >= nproc) {
+	// If all processes are waiting, release and reset barrier.
+	if ((nproc_waiting += data.nproc) >= nproc) {
 
 		printf("[%d] Releasing barrier!\n", getpid());
 
 		// Release all.
-		send_simpleMsg(-1, MSG_CONT_ALL);
+		send_simpleMsg(-1, MSG_WAIT_DONE);
 
 		// Reset barrier.
-		dsm_stopped = 0;
+		nproc_waiting = 0;
 	}
 }
 
@@ -439,10 +424,8 @@ static int dequeueOperation (dsm_opqueue *oq) {
 
 // Prints the operation-queue.
 static void showOpQueue (dsm_opqueue *oq) {
-	printf("oq->step = %d\n", oq->step);
-	printf("oq->queueSize = %zu\n", oq->queueSize);
-	printf("oq->head = %u, oq->tail = %u\n", oq->head, oq->tail);
-	printf("oq->queue = [");
+	printf("Operation Step = %d\n", oq->step);
+	printf("Operation Queue = [");
 	for (int i = oq->tail; i != oq->head; i = (i + 1) % oq->queueSize) {
 		printf("%d", oq->queue[i]);
 		if (i < (oq->head - 1)) {
@@ -503,6 +486,11 @@ static int parseArgs (int argc, const char *argv[], const char **sid_p,
 	// Ensure -nproc wasn't optional.
 	if (*nproc_p == -1) {
 		dsm_panicf("Required argument missing \"-nproc=<nproc>\"");
+	}
+
+	// Ensure -nproc is >= 2.
+	if (*nproc_p < 2) {
+		dsm_cpanic("Invalid input!", "-nproc must be >= 2");
 	}
 
 	return (*sid_p && *addr_p && *port_p && *nproc_p != -1);
@@ -575,6 +563,7 @@ int main (int argc, const char *argv[]) {
 		dsm_setMsgFunc(MSG_STOP_DONE, msg_stopDone, fmap) != 0 ||
 		dsm_setMsgFunc(MSG_SYNC_INFO, msg_syncInfo, fmap) != 0 ||
 		dsm_setMsgFunc(MSG_SYNC_DONE, msg_syncDone, fmap) != 0 ||
+		dsm_setMsgFunc(MSG_WAIT_BARR, msg_waitBarr, fmap) != 0 ||
 		dsm_setMsgFunc(MSG_PRGM_DONE, msg_prgmDone, fmap) != 0) {
 		dsm_cpanic("Couldn't set message functions!", "Unknown");
 	}
@@ -596,12 +585,13 @@ int main (int argc, const char *argv[]) {
 	// Set listener socket as pollable.
 	dsm_setPollable(sock_listen, POLLIN, pollableSet);
 
-	printf("Server setup complete: "); dsm_showSocketInfo(sock_listen);
+	printf("==================== SERVER ====================\n");
+	printf("Listener socket: "); dsm_showSocketInfo(sock_listen);
 	printf("sid = %s\n", sid);
 	printf("addr = %s\n", addr);
 	printf("port = %s\n", port);
 	printf("nproc = %u\n", nproc);
-	
+	printf("===============================================\n");
 
 	// ----------------------------- Main Body ----------------------------------
 	
@@ -630,9 +620,10 @@ int main (int argc, const char *argv[]) {
 			}
 		}
 
-		printf("[%d] State Update:\n", getpid());
+		printf("[%d] Server State Change:\n", getpid());
 		dsm_showPollable(pollableSet);
 		showOpQueue(opqueue);
+		printf("===============================================\n");
 		putchar('\n');
 	}
 	
