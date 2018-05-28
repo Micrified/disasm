@@ -60,6 +60,9 @@ unsigned int nproc = -1;
 // The number of stopped processes.
 unsigned int nproc_stopped;
 
+// The number of waiting processes (barrier).
+unsigned it nproc_waiting;
+
 // The number of updated processes.
 unsigned int nproc_synced;
 
@@ -283,6 +286,40 @@ static void msg_syncDone (int fd, dsm_msg *mp) {
 
 		// Reset step to ready.
 		opqueue->step = STEP_READY;
+	}
+}
+
+// Message indicating arbiter is waiting on a barrier.
+static void msg_waitBarr (int fd, dsm_msg *mp) {
+	dsm_msg_barr data = mp->payload.barr;
+
+	// Verify that sender isn't also currently writing (makes no sense).
+	if (isOpQueueEmpty(opqueue) == 0 && fd == getQueueTail(opqueue)) {
+		dsm_cpanic("Inconsistency found!", "Can't send barrier message 
+	}
+	if (nproc_waiting != 0 
+	
+	// Verify there are no ongoing write operations.
+	if (opqueue->step != STEP_READY) {
+
+		// Sanity check: If set to ready, queue must be empty.
+		if (isOpQueueEmpty(opqueue) == 0) {
+			dsm_cpanic("Inconsistency found!", "(ready-state ^ queued op!)");
+		}
+		
+		dsm_cpanic("Illegal request", "Cannot perform barrier during write!");
+	}
+
+	// If all processes have stopped, release and reset barrier.
+	if ((dsm_stopped += data.nproc) >= nproc) {
+
+		printf("[%d] Releasing barrier!\n", getpid());
+
+		// Release all.
+		send_simpleMsg(-1, MSG_CONT_ALL);
+
+		// Reset barrier.
+		dsm_stopped = 0;
 	}
 }
 

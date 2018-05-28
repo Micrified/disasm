@@ -27,11 +27,13 @@ typedef enum {
 	MSG_SYNC_INFO,						// [A->S] Arbiter synchronization info.
 	MSG_STOP_DONE,						// [A->S] Confirms all proc's paused.
 	MSG_SYNC_DONE,						// [A->S] Confirms received all data.
+	MSG_WAIT_BARR,						// [A->S] Arbiter is waiting on barrier.
 	MSG_PRGM_DONE,						// [A->S] Arbiter is exiting.
 
 	MSG_MAX_VALUE
 } dsm_msg_t;
 
+// [Not all message types require additional data. See those that do below].
 
 // MSG_GET_SESSION: Initialization message payload.
 typedef struct dsm_msg_get {
@@ -61,6 +63,9 @@ typedef struct dsm_msg_done {
 	unsigned int nproc;
 } dsm_msg_done;
 
+// MSG_WAIT_BARR: Reached barrier message.
+typedef dsm_msg_done dsm_msg_barr;
+
 // UNION: Aggregate describing various message payloads.
 typedef union dsm_msg_payload {
 	dsm_msg_get get;
@@ -68,6 +73,7 @@ typedef union dsm_msg_payload {
 	dsm_msg_del del;
 	dsm_msg_sync sync;
 	dsm_msg_done done;
+	dsm_msg_barr barr;
 } dsm_msg_payload;
 
 // Structure describing message format.
