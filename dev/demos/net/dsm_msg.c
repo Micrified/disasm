@@ -77,7 +77,7 @@ void dsm_showMsg(dsm_msg *mp) {
 		}
 		case MSG_SYNC_INFO: {
 			printf("TYPE: MSG_SYNC_INFO\n");
-			printf("OFFSET: %lld\n", mp->payload.sync.offset);
+			printf("OFFSET: %ld\n", mp->payload.sync.offset);
 			printf("SIZE: %zu\n", mp->payload.sync.size);
 			break;
 		}

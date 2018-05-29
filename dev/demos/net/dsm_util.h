@@ -62,6 +62,8 @@ int dsm_getSemValue (sem_t *sp);
  *******************************************************************************
 */
 
+// Allocates a zeroed block of memory. Exits fatally on error.
+void *dsm_zalloc (size_t size);
 
 // Sets the given protections to a memory page. Exits fatally on error.
 void dsm_mprotect (void *address, size_t size, int flags);

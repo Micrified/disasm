@@ -512,7 +512,7 @@ static void processConnection (int sock_listen) {
 	dsm_setPollable(sock_new, POLLIN, pollableSet);
 }
 
-// Reads message from fd. Decodes and dispatches response. Then disconnects.
+// Reads message from fd. Decodes and selects appropriate action.
 static void processMessage (int fd) {
 	dsm_msg msg;
 	void (*action)(int, dsm_msg *);
@@ -591,7 +591,7 @@ int main (int argc, const char *argv[]) {
 	printf("addr = %s\n", addr);
 	printf("port = %s\n", port);
 	printf("nproc = %u\n", nproc);
-	printf("===============================================\n");
+	printf("================================================\n");
 
 	// ----------------------------- Main Body ----------------------------------
 	
@@ -623,7 +623,7 @@ int main (int argc, const char *argv[]) {
 		printf("[%d] Server State Change:\n", getpid());
 		dsm_showPollable(pollableSet);
 		showOpQueue(opqueue);
-		printf("===============================================\n");
+		printf("================================================\n");
 		putchar('\n');
 	}
 	

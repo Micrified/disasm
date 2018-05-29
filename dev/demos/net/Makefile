@@ -1,5 +1,5 @@
 CC=gcc
-CFLAGS=-Wall -g
+CFLAGS=-Wall -Werror -g
 LFLAGS= -pthread
 DFILES= dsm_sessiond.c dsm_htab.c dsm_inet.c dsm_msg.c dsm_util.c dsm_poll.c
 SFILES= dsm_server.c dsm_inet.c dsm_msg.c dsm_util.c dsm_poll.c
