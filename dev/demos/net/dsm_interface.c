@@ -38,6 +38,9 @@ dsm_ptab ptab = (dsm_ptab){.length = 0, .processes = NULL, .writer = -1};
 // [A] Pollable file-descriptors.
 pollset *pollableSet;
 
+// [A] The operation queue.
+dsm_opqueue *opqueue;
+
 // [A] Function map.
 dsm_msg_func fmap[MAX_MSG_VALUE];
 
@@ -207,6 +210,11 @@ static void msg_contAll (int fd, dsm_msg *mp) {
 	for (int i = 0; i < ptab.length; i++) {
 		p = ptab.processes + i;
 
+		// Skip unused slots.
+		if (p->pid == 0) {
+			continue;
+		}
+
 		// Unset stop-bit.
 		p->flags.is_stopped = 0;
 
@@ -229,6 +237,11 @@ static void msg_waitDone (int fd, dsm_msg *mp) {
 	// Unset the waiting bit for all processes in the table.
 	for (int i = 0; i < ptab.length; i++) {
 		p = ptab.processes + i;
+
+		// Skip unused slots.
+		if (p->pid == 0) {
+			continue;
+		}
 
 		// Unset wait-bit.
 		p->flags.is_waiting = 0;
@@ -257,15 +270,57 @@ static void msg_syncInfo (int fd, dsm_msg *mp) {
 
 	// Ensure sender is active-writer.
 	if (fd != ptab.writer) {
-		dsm_cpanic("msg_syncInfo", "Unauthorized sychronization message!");
+		dsm_cpanic("msg_syncInfo", "Unauthorized synchronization message!");
 	}
 
 	// Forward message to server.
-	dsm_sendall(sock_server, mp, sizeof(*,p));
+	dsm_sendall(sock_server, mp, sizeof(*mp));
 }
 
 // Message from process requesting write-access.
+static void msg_syncRequest (int fd, dsm_msg *mp) {
+	dsm_proc *p;
 
+	// Ensure write-request isn't coming from server or is already writer.
+	if (fd == sock_server || fd == ptab.writer) {
+		dsm_cpanic("msg_syncRequest", "Unauthorized sychronization message!");
+	}
+
+	// Get process entry.
+	p = ptab->processes + fd;
+
+	// Enqueue write operation.
+	enqueueOperation(p->pid, opqueue);
+
+	// If a write is currently underway, return early.
+	if (ptab.writer != -1) {
+		return;
+	}
+
+	// Otherwise, set current process as writer.
+	ptab.writer = fd;
+
+	// Instruct all processes to stop.
+	for (int i = 0; i < ptab.length; i++) {
+		p = ptab.processes + i;
+
+		// Skip unused slots.
+		if (p->pid == 0) {
+			continue;
+		}
+
+		// Skip waiting/stopped processes (they're already suspended).
+		if (p->flags.is_waiting == 1 || p->flags.is_stopped == 1) {
+			continue;
+		}
+
+		// Set stopped bit.
+		p->flags.is_stopped = 1;
+
+		// Send stop signal.
+		signalProcess(p->pid, SIGTSTP);
+	}
+}
 
 /*
  *******************************************************************************
@@ -411,6 +466,9 @@ static void arbiter (const char *sid, unsigned int nproc, const char *addr,
 	// Initialize pollable-set.
 	pollableSet = dsm_initPollSet(DSM_MIN_POLLABLE);
 
+	// Initialize operation-queue.
+	opqueue = initOpQueue(DSM_MIN_OPQUEUE_SIZE);
+
 	// Setup server socket.
 	sock_server = getServerSocket(sid, addr, port, nproc);
 
@@ -463,6 +521,9 @@ static void arbiter (const char *sid, unsigned int nproc, const char *addr,
 
 	// Disconnect from server.
 	close(sock_server);
+
+	// Free operation-queue.
+	freeOpQueue(opqueue);
 
 	// Free the pollable set.
 	dsm_freePollable(pollableSet);
