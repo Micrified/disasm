@@ -2,9 +2,18 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "dsm_util.h"
-#include "dsm_interface.h"
+#include <signal.h>
+#include <unistd.h>
 
+#include "dsm_util.h"
+#include "dsm_inet.h"
+#include "dsm_queue.h"
+#include "dsm_msg.h"
+#include "dsm_poll.h"
+
+#include "dsm_interface.h"
+#include "dsm_interface_ptab.h"
+#include "dsm_interface_msg.h"
 
 /*
  *******************************************************************************
@@ -29,11 +38,12 @@
  *******************************************************************************
 */
 
+
 // [A] Boolean flag indicating if program should continue polling.
 int alive = 1;
 
 // [A] Process table. Indexed by file-descriptor.
-dsm_ptab ptab = (dsm_ptab){.length = 0, .processes = NULL, .writer = -1};
+dsm_ptab ptab;
 
 // [A] Pollable file-descriptors.
 pollset *pollableSet;
@@ -42,7 +52,7 @@ pollset *pollableSet;
 dsm_opqueue *opqueue;
 
 // [A] Function map.
-dsm_msg_func fmap[MAX_MSG_VALUE];
+dsm_msg_func fmap[MSG_MAX_VALUE];
 
 // [A] Server-socket. Connects to session-server.
 int sock_server;
@@ -53,98 +63,13 @@ int sock_listen;
 
 /*
  *******************************************************************************
- *                     Process Table Function Definitions                      *
+ *                            Forward Declarations                             *
  *******************************************************************************
 */
 
 
-// [A] Initializes the global process table.
-static void initProcessTable (unsigned int length) {
-	
-	// Allocate and zero out process array.
-	ptab.processes = (dsm_proc *)dsm_zalloc(length * sizeof(dsm_proc));
-
-	// Update length.
-	ptab.length = length;
-}
-
-// [A] Resize the process table (at least minLength).
-static void resizeProcessTable (unsigned int minLength) {
-	void *new_processes;
-	unsigned int new_length;
-
-	// Compute new length.
-	new_length = MAX(minLength, 2 * ptab.length);
-	
-	// Allocate and zero out new process array.
-	new_processes = dsm_zalloc(new_length * sizeof(dsm_proc));
-
-	// Copy over the old array.
-	memcpy(new_processes, ptab.processes, ptab.length * sizeof(dsm_proc));
-
-	// Free old array.
-	free(ptab.processes);
-
-	// Assign new array, and update the length.
-	ptab.processes = new_processes;
-	ptab.length = new_length;
-}
-
-// [A] Deallocates the process table.
-static void freeProcessTable (void) {
-	free(ptab.processes);
-}
-
-// [A] Registers a new file-descriptor in the process table.
-static void registerProcess (int fd, int pid) {
-
-	// Reallocate if necessary.
-	if (fd >= ptab.length) {
-		resizeProcessTable(fd + 1);
-	}
-
-	// Verify entry is not occupied (should not happen).
-	if (ptab.processes[fd].pid != 0) {
-		dsm_cpanic("registerProcess", "Current slot occupied!");
-	}
-	
-	// Insert new entry.
-	ptab.processes[fd] = (dsm_proc) {
-		.fd = fd,
-		.pid = pid,
-		.flags = (dsm_pstate){.is_stopped = 0, .is_waiting = 0}
-	};
-}
-
-// [A] Unregisters a given file-descriptor from the process table.
-static void unregisterProcess (int fd) {
-
-	// Verify location is accessible.
-	if (fd < 0 || fd > ptab.length || ptab.processes == NULL) {
-		dsm_cpanic("unregisterProcess", "Location inaccessible!");
-	}
-
-	memset(ptab.processes + fd, 0, sizeof(dsm_proc));
-}
-
-// [A] Prints the process table.
-static void showProcessTable (void) {
-	int n = 0;
-	printf("------------------------- Process Table -----------------------\n");
-	printf("\tFD\t\tPID\t\tSTOP\t\tWAIT\n");
-	for (int i = 0; i < ptab.length; i++) {
-		if (ptab.processes[i].pid == 0) {
-			continue;
-		}
-		n++;
-		dsm_proc p = ptab.processes[i];
-		char s = (p.flags.is_stopped ? 'Y' : 'N');
-		char w = (p.flags.is_waiting ? 'Y' : 'N');
-		printf("\t%d\t\t%d\t\t%c\t\t%c\n", i, p.pid, s, w);
-	}
-	printf(" [%d/%d slots occupied]\n", n, ptab.length);
-	printf("---------------------------------------------------------------\n");
-}
+// Sends signal to 'fd'. If -1 is specified, sends to all fds in ptab.
+static void signalProcess (int fd, int signal);
 
 
 /*
@@ -153,32 +78,48 @@ static void showProcessTable (void) {
  *******************************************************************************
 */
 
-
-// Informs session-server that all processes on this machine have finished.
-static void send_programDone (int fd, unsigned int nproc) {
+// Sends fd a dsm_msg_done message.
+static void send_doneMsg (int fd, dsm_msg_t type, unsigned int nproc) {
 	dsm_msg msg;
 
 	// Configure message.
 	memset(&msg, 0, sizeof(msg));
-	msg.type = MSG_PRGM_DONE;
+	msg.type = type;
 	msg.payload.done.nproc = nproc;
 
 	// Send the message.
 	dsm_sendall(fd, &msg, sizeof(msg));
 }
 
-// Informs session-server that all processes on this machine are stopped.
-static void send_stopDone (int fd, unsigned int nproc) {
+// Sends basic message 'type' to fd. If fd == -1, sends to all file-descriptors.
+static void send_simpleMsg (int fd, dsm_msg_t type) {
 	dsm_msg msg;
 
 	// Configure message.
 	memset(&msg, 0, sizeof(msg));
-	msg.type = MSG_STOP_DONE;
-	msg.payload.done.nproc = nproc;
+	msg.type = type;
 
-	// Send the message.
-	dsm_sendall(fd, &msg, sizeof(msg));
+	// If fd is non-negative, send just to fd.
+	if (fd >= 0) {
+		dsm_sendall(fd, &msg, sizeof(msg));
+		return;
+	}
+
+	// Otherwise, send to all (skip listener socket at index 0).
+	for (int i = 1; i < pollableSet->fp; i++) {
+		dsm_sendall(pollableSet->fds[i].fd, &msg, sizeof(msg));
+	}
 }
+
+/*
+ *******************************************************************************
+ *                           Process Table Functions                           *
+ *******************************************************************************
+*/
+
+
+#include "dsm_interface_ptab.c"
+
 
 /*
  *******************************************************************************
@@ -186,141 +127,9 @@ static void send_stopDone (int fd, unsigned int nproc) {
  *******************************************************************************
 */
 
-// Message requesting arbiter stop all processes and send ack.
-static void msg_stopAll (int fd, dsm_msg *mp) {
 
-	// If a writer is set, all processes are already paused.
-	if (ptab.writer != -1) {
-		send_stopDone(fd, nproc);
-		return;
-	}
+#include "dsm_interface_msg.c"
 
-	// Otherwise, pause all processes.
-	signalProcess(-1, SIGTSTP);
-
-	// Send response.
-	send_stopDone(fd, nproc);
-}
-
-// Message requesting arbiter continue all stopped processes.
-static void msg_contAll (int fd, dsm_msg *mp) {
-	dsm_proc *p;
-
-	// Unset the stop bit for all processes in the table.
-	for (int i = 0; i < ptab.length; i++) {
-		p = ptab.processes + i;
-
-		// Skip unused slots.
-		if (p->pid == 0) {
-			continue;
-		}
-
-		// Unset stop-bit.
-		p->flags.is_stopped = 0;
-
-		// Signal only if: not-waiting.
-		if (p->flags.is_waiting == 0) {
-			signalProcess(p->pid, SIGCONT);
-		}
-	}
-
-	// If writer was set, unset it. The write is over.
-	if (ptab.writer != -1) {
-		ptab.writer = -1;
-	}
-}
-
-// Message requesting arbiter continue all waiting processes.
-static void msg_waitDone (int fd, dsm_msg *mp) {
-	dsm_proc *p;
-
-	// Unset the waiting bit for all processes in the table.
-	for (int i = 0; i < ptab.length; i++) {
-		p = ptab.processes + i;
-
-		// Skip unused slots.
-		if (p->pid == 0) {
-			continue;
-		}
-
-		// Unset wait-bit.
-		p->flags.is_waiting = 0;
-
-		// Signal only if: not-stopped (shouldn't occur).
-		if (p->flags.is_stopped == 0) {
-			signalProcess(p->pid, SIGCONT);
-		}
-	}
-}
-
-// Message informing arbiter that a write-operation may now proceed.
-static void msg_writeOkay (int fd, dsm_msg *mp) {
-
-	// Ensure writer exists.
-	if (ptab.writer == -1) {
-		dsm_cpanic("msg_writeOkay", "No writing process set!");
-	}
-	
-	// Forward message to writer.
-	dsm_sendall(ptab.writer, mp, sizeof(*mp));
-}
-
-// Message from writer with write data.
-static void msg_syncInfo (int fd, dsm_msg *mp) {
-
-	// Ensure sender is active-writer.
-	if (fd != ptab.writer) {
-		dsm_cpanic("msg_syncInfo", "Unauthorized synchronization message!");
-	}
-
-	// Forward message to server.
-	dsm_sendall(sock_server, mp, sizeof(*mp));
-}
-
-// Message from process requesting write-access.
-static void msg_syncRequest (int fd, dsm_msg *mp) {
-	dsm_proc *p;
-
-	// Ensure write-request isn't coming from server or is already writer.
-	if (fd == sock_server || fd == ptab.writer) {
-		dsm_cpanic("msg_syncRequest", "Unauthorized sychronization message!");
-	}
-
-	// Get process entry.
-	p = ptab->processes + fd;
-
-	// Enqueue write operation.
-	enqueueOperation(p->pid, opqueue);
-
-	// If a write is currently underway, return early.
-	if (ptab.writer != -1) {
-		return;
-	}
-
-	// Otherwise, set current process as writer.
-	ptab.writer = fd;
-
-	// Instruct all processes to stop.
-	for (int i = 0; i < ptab.length; i++) {
-		p = ptab.processes + i;
-
-		// Skip unused slots.
-		if (p->pid == 0) {
-			continue;
-		}
-
-		// Skip waiting/stopped processes (they're already suspended).
-		if (p->flags.is_waiting == 1 || p->flags.is_stopped == 1) {
-			continue;
-		}
-
-		// Set stopped bit.
-		p->flags.is_stopped = 1;
-
-		// Send stop signal.
-		signalProcess(p->pid, SIGTSTP);
-	}
-}
 
 /*
  *******************************************************************************
@@ -328,7 +137,8 @@ static void msg_syncRequest (int fd, dsm_msg *mp) {
  *******************************************************************************
 */
 
-// [A] Sends signal to 'fd'. If -1 is specified, sends to all fds in ptab.
+
+// Sends signal to 'fd'. If -1 is specified, sends to all fds in ptab.
 static void signalProcess (int fd, int signal) {
 	int pid;
 
@@ -365,11 +175,14 @@ static void signalProcess (int fd, int signal) {
 	}
 }
 
-// [A] Contacts daemon with sid, sets session details. Exits fatally on error.
+// Contacts daemon with sid, sets session details. Exits fatally on error.
 static int getServerSocket (const char *sid, const char *addr, 
 	const char *port, unsigned int nproc) {
 	dsm_msg msg;
 	int s;
+
+	/*
+		****************************
 
 	// 1. Construct GET request.
 	memset(&msg, 0, sizeof(msg));
@@ -379,6 +192,7 @@ static int getServerSocket (const char *sid, const char *addr,
 
 	// 2. Connect to session daemon.
 	s = dsm_getConnectedSocket(addr, port);
+	printf("[%d] Connected to daemon!\n", getpid());
 
 	// 3. Send request.
 	dsm_sendall(s, &msg, sizeof(msg));
@@ -391,12 +205,24 @@ static int getServerSocket (const char *sid, const char *addr,
 		dsm_cpanic("getServerSocket", "Unrecognized response!");
 	}
 
+	printf("[%d] Received reply from daemon!\n", getpid());
+	dsm_showMsg(&msg);
+
 	// 6. Close connection.
 	close(s);
+
+		****************************
+	*/
+
+	printf("Enter the port of the server: ");
+	scanf("%u", &(msg.payload.set.port));
+	putchar('\n');
 
 	// 7. Connect to session server.
 	s = dsm_getConnectedSocket(DSM_LOOPBACK_ADDR, 
 			dsm_portToString(msg.payload.set.port));
+
+	printf("[%d] Connected to server!\n", getpid());
 
 	// 8. Return connected socket.
 	return s; 
@@ -444,6 +270,7 @@ static void processMessage (int fd) {
 }
 
 
+
 /*
  *******************************************************************************
  *                                   Arbiter                                   *
@@ -458,7 +285,16 @@ static void arbiter (const char *sid, unsigned int nproc, const char *addr,
 	// ------------------------------ Setup ------------------------------------
 
 	// Register functions.
-	
+	if (dsm_setMsgFunc(MSG_STOP_ALL, msg_stopAll, fmap)		!= 0 ||
+		dsm_setMsgFunc(MSG_CONT_ALL, msg_contAll, fmap) 	!= 0 ||
+		dsm_setMsgFunc(MSG_WAIT_DONE, msg_waitDone, fmap) 	!= 0 ||
+		dsm_setMsgFunc(MSG_WRITE_OKAY, msg_writeOkay, fmap) != 0 ||
+		dsm_setMsgFunc(MSG_SYNC_INFO, msg_syncInfo, fmap) 	!= 0 ||
+		dsm_setMsgFunc(MSG_SYNC_REQ, msg_syncRequest, fmap) != 0 ||
+		dsm_setMsgFunc(MSG_WAIT_BARR, msg_waitBarr, fmap) 	!= 0 ||
+		dsm_setMsgFunc(MSG_PRGM_DONE, msg_prgmDone, fmap) 	!= 0) {
+		dsm_cpanic("Couldn't set functions", "Unknown!");
+	}
 
 	// Initialize process table.
 	initProcessTable(DSM_MIN_NPROC);
@@ -480,17 +316,27 @@ static void arbiter (const char *sid, unsigned int nproc, const char *addr,
 		dsm_panic("Couldn't listen on socket!");
 	}
 
+	// Set listener socket as pollable.
+	dsm_setPollable(sock_listen, POLLIN, pollableSet);
+
 	// Set server socket as pollable.
 	dsm_setPollable(sock_server, POLLIN, pollableSet);
 
-	// Set listener socket as pollable.
-	dsm_setPollable(sock_listen, POLLIN, pollableSet);
+	printf("=================== ARBITER ====================\n");
+	printf("Listener socket: "); dsm_showSocketInfo(sock_listen);
+	printf("sid = %s\n", sid);
+	printf("nproc = %u\n", nproc);
+	dsm_showPollable(pollableSet);
+	showOpQueue(opqueue);
+	showProcessTable();
+	printf("================================================\n");
+
 
 	// ---------------------------- Main Body -----------------------------------
 
 	while (alive && (new = poll(pollableSet->fds, pollableSet->fp, -1)) != -1) {
 		for (int i = 0; i < pollableSet->fp; i++) {
-			pfd = pollableSet->fds[i];
+			pfd = pollableSet->fds + i;
 
 			// If nothing to read, ignore file-descriptor.
 			if ((pfd->revents & POLLIN) == 0) {
@@ -509,6 +355,7 @@ static void arbiter (const char *sid, unsigned int nproc, const char *addr,
 
 		printf("[%d] Arbiter State\n", getpid());
 		dsm_showPollable(pollableSet);
+		showOpQueue(opqueue);
 		showProcessTable();
 		putchar('\n');
 	}
@@ -517,10 +364,13 @@ static void arbiter (const char *sid, unsigned int nproc, const char *addr,
 	// ----------------------------- Cleanup ------------------------------------
 
 	// Send disconnect message.
-	send_programDone(sock_server);
+	send_doneMsg(sock_server, MSG_PRGM_DONE, );
 
 	// Disconnect from server.
 	close(sock_server);
+
+	// Close listener socket.
+	close(sock_listen);
 
 	// Free operation-queue.
 	freeOpQueue(opqueue);
@@ -546,16 +396,12 @@ static void arbiter (const char *sid, unsigned int nproc, const char *addr,
 
 
 // Initialize shared memory session for nproc processes using daemon at port.
-void dsm_init (const char *sid, unsigned int nproc, unsigned int port) {
-
-
-} 
+//void dsm_init (const char *sid, unsigned int nproc, unsigned int port) {
+//} 
 
 // Exit shared memory session.
-void dsm_exit (void) {
-
-
-}
+//void dsm_exit (void) {
+//}
 
 
 /*
@@ -566,27 +412,7 @@ void dsm_exit (void) {
 
 
 int main (int argc, const char *argv[]) {
-	int input, fd, pid;
-	printf("Testing out the table!\n");
+	arbiter("arethusa", 2, "127.0.0.1", "4200");
 
-	initProcessTable(4);
-
-	while (1) {
-		printf("1: Make Entry. 2: Quit\n");
-		printf(": ");
-		
-		scanf("%d", &input);
-
-		if (input == 2) {
-			break;
-		}
-
-		printf("fd: "); scanf("%d", &fd);
-		printf("pid: "); scanf("%d", &pid);
-
-		registerProcess(fd, pid);
-		showProcessTable();
-	}
-
-	freeProcessTable();
+	return 0;
 }

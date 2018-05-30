@@ -24,6 +24,7 @@
 typedef struct dsm_pstate {
 	unsigned int is_stopped;						// Process stopped.
 	unsigned int is_waiting;						// Process at a barrier.
+	unsigned int is_queued;							// Process in writer-queue.
 } dsm_pstate;
 
 // Structure describing process entry.
@@ -37,7 +38,6 @@ typedef struct dsm_proc {
 typedef struct dsm_ptab {
 	unsigned int length;							// Process table length.
 	dsm_proc *processes;							// Array of pstates.
-	int writer;										// Writing process.
 } dsm_ptab;
 
 
@@ -49,10 +49,10 @@ typedef struct dsm_ptab {
 
 
 // Initialize shared memory session for nproc processes using daemon at port.
-void dsm_init (const char *sid, unsigned int nproc, unsigned int port); 
+//void dsm_init (const char *sid, unsigned int nproc, unsigned int port); 
 
 // Exit shared memory session.
-void dsm_exit (void);
+//void dsm_exit (void);
 
 
 #endif

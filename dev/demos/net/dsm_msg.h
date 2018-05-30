@@ -1,6 +1,8 @@
 #if !defined(DSM_MSG_H)
 #define DSM_MSG_H
 
+#include <sys/types.h>
+
 #include "dsm_htab.h"
 
 
