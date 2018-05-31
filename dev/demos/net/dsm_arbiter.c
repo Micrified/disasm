@@ -593,12 +593,17 @@ static int getServerSocket (const char *sid, const char *addr,
 		****************************
 	*/
 
+	char addrbuf[INET6_ADDRSTRLEN];
+	printf("Enter the address of the server: ");
+	scanf("%s", addrbuf);
+	addrbuf[INET6_ADDRSTRLEN - 1] = '\0';
+
 	printf("Enter the port of the server: ");
 	scanf("%u", &(msg.payload.set.port));
 	putchar('\n');
 
 	// 7. Connect to session server.
-	s = dsm_getConnectedSocket(DSM_LOOPBACK_ADDR, 
+	s = dsm_getConnectedSocket(addrbuf, 
 			dsm_portToString(msg.payload.set.port));
 
 	printf("[%d] Connected to server!\n", getpid());
