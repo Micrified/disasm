@@ -28,6 +28,11 @@
 void configMsg (int i, dsm_msg *mp) {
 	memset(mp, 0, sizeof(*mp));
 	switch (i) {
+		case 0: {
+			mp->type = MSG_INIT_DONE;
+			mp->payload.done.nproc = 1;
+			break;
+		}
 		case 1: {
 			mp->type = MSG_SYNC_REQ;
 			break;
@@ -65,6 +70,12 @@ void configMsg (int i, dsm_msg *mp) {
 			printf("NPROC: ");
 			scanf("%u", &(mp->payload.get.nproc));
 			printf("Done!\n");
+			break;
+		}
+		case 8: {
+			mp->type = MSG_ADD_PROC;
+			printf("PID: ");
+			scanf("%d", &(mp->payload.proc.pid));
 			break;
 		}
 		default: {
@@ -114,6 +125,7 @@ unsigned int getInput (void) {
 		printf("Select the message to send:\n");
 
 		printf("\tSERVER-REQUESTS\n");
+		printf("\t\"0\" = Initialized.\n");
 		printf("\t\"1\" = Request to write.\n");
 		printf("\t\"2\" = Have stopped.\n");
 		printf("\t\"3\" = Sync done.\n");
@@ -123,11 +135,13 @@ unsigned int getInput (void) {
 
 		printf("\tDAEMON-REQUESTS\n");
 		printf("\t\"7\" = Get session.\n");
+		printf("\tARBITER-REQUESTS\n");
+		printf("\t\"8\" = Add Process.\n");
 		printf("\tOTHER\n");
-		printf("\n\t\"8\" = Read Response.\n");
+		printf("\n\t\"9\" = Read Response.\n");
 		printf("Input: ");
 		scanf("%u", &input);
-	} while (input > 9);
+	} while (input > 10);
 
 	return input;
 }
@@ -151,7 +165,7 @@ int main (int argc, const char *argv[]) {
 	while (1) {
 		unsigned int i = getInput();
 
-		if (i == 8) {
+		if (i == 9) {
 			getReply(s);
 		} else {
 			sendMsg(i, s);

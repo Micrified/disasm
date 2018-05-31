@@ -1,5 +1,5 @@
-#if !defined(DSM_SESSIOND_H)
-#define DSM_SESSIOND_H
+#if !defined(DSM_DAEMON_H)
+#define DSM_DAEMON_H
 
 
 /*

@@ -1,5 +1,5 @@
-#if !defined(DSM_INTERFACE_H)
-#define DSM_INTERFACE_H
+#if !defined(DSM_ARBITER_H)
+#define DSM_ARBITER_H
 
 
 /*
@@ -39,20 +39,6 @@ typedef struct dsm_ptab {
 	unsigned int length;							// Process table length.
 	dsm_proc *processes;							// Array of pstates.
 } dsm_ptab;
-
-
-/*
- *******************************************************************************
- *                            Function Declarations                            *
- *******************************************************************************
-*/
-
-
-// Initialize shared memory session for nproc processes using daemon at port.
-//void dsm_init (const char *sid, unsigned int nproc, unsigned int port); 
-
-// Exit shared memory session.
-//void dsm_exit (void);
 
 
 #endif

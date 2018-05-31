@@ -45,25 +45,25 @@ typedef struct dsm_opqueue {
 
 
 // Allocates and initializes an operation-queue.
-dsm_opqueue *initOpQueue (size_t queueSize);
+dsm_opqueue *dsm_initOpQueue (size_t queueSize);
 
 // Free's given operation-queue.
-void freeOpQueue (dsm_opqueue *oq);
+void dsm_freeOpQueue (dsm_opqueue *oq);
 
 // Returns true (1) if the given operation-queue is empty.
-int isOpQueueEmpty (dsm_opqueue *oq);
+int dsm_isOpQueueEmpty (dsm_opqueue *oq);
 
-// Returns tail of operation-queue. Exits fatally on error.
-int getQueueTail (dsm_opqueue *oq);
+// Returns head of operation-queue. Exits fatally on error.
+int dsm_getOpQueueHead (dsm_opqueue *oq);
 
 // Enqueues file-descriptor in operation-queue for write. Resizes if needed.
-void enqueueOperation (int fd, dsm_opqueue *oq);
+void dsm_enqueueOpQueue (int fd, dsm_opqueue *oq);
 
 // Dequeues file-descriptor from operation queue. Panics on error.
-int dequeueOperation (dsm_opqueue *oq);
+int dsm_dequeueOpQueue (dsm_opqueue *oq);
 
 // Prints the operation-queue.
-void showOpQueue (dsm_opqueue *oq);
+void dsm_showOpQueue (dsm_opqueue *oq);
 
 
 #endif

@@ -13,7 +13,7 @@
 */
 
 
-// TYPE: Enumeration of message types. (A = arbiter, S = server, D = daemon).
+// TYPE: All message types. (A = arbiter, S = server, D = daemon, P = process).
 typedef enum {
 	MSG_MIN_VALUE = 0,
 
@@ -26,12 +26,15 @@ typedef enum {
 	MSG_WAIT_DONE,						// [S->A] Arbiter can release barrier.
 	MSG_WRITE_OKAY,						// [S->A] Arbiter may write.
 
+	MSG_INIT_DONE,						// [A->S] Arbiter is ready to start.
 	MSG_SYNC_REQ,						// [A->S] Arbiter asks for write perms.
 	MSG_SYNC_INFO,						// [A->S] Arbiter synchronization info.
 	MSG_STOP_DONE,						// [A->S] Confirms all proc's paused.
 	MSG_SYNC_DONE,						// [A->S] Confirms received all data.
 	MSG_WAIT_BARR,						// [A->S] Arbiter is waiting on barrier.
 	MSG_PRGM_DONE,						// [A->S] Arbiter is exiting.
+
+	MSG_ADD_PROC,						// [P->A] Arbiter adds a process.
 
 	MSG_MAX_VALUE
 } dsm_msg_t;
@@ -69,6 +72,11 @@ typedef struct dsm_msg_done {
 // MSG_WAIT_BARR: Reached barrier message.
 typedef dsm_msg_done dsm_msg_barr;
 
+// MSG_ADD_PROC: Add a process to an arbiter.
+typedef struct dsm_msg_proc {
+	int pid;
+} dsm_msg_proc;
+
 // UNION: Aggregate describing various message payloads.
 typedef union dsm_msg_payload {
 	dsm_msg_get get;
@@ -77,6 +85,7 @@ typedef union dsm_msg_payload {
 	dsm_msg_sync sync;
 	dsm_msg_done done;
 	dsm_msg_barr barr;
+	dsm_msg_proc proc;
 } dsm_msg_payload;
 
 // Structure describing message format.

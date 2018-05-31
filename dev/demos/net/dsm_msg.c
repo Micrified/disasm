@@ -71,6 +71,10 @@ void dsm_showMsg(dsm_msg *mp) {
 			printf("TYPE: MSG_WRITE_OKAY\n");
 			break;
 		}
+		case MSG_INIT_DONE: {
+			printf("TYPE: MSG_INIT_DONE\n");
+			printf("NPROC: %u\n", mp->payload.done.nproc);
+		}
 		case MSG_SYNC_REQ: {
 			printf("TYPE: MSG_SYNC_REQ\n");
 			break;
@@ -98,6 +102,11 @@ void dsm_showMsg(dsm_msg *mp) {
 		}
 		case MSG_PRGM_DONE: {
 			printf("TYPE: MSG_PRGM_DONE\n");
+			break;
+		}
+		case MSG_ADD_PROC: {
+			printf("TYPE: MSG_ADD_PROC\n");
+			printf("PID: %d\n", mp->payload.proc.pid);
 			break;
 		}
 		default:

@@ -1,9 +1,9 @@
 CC=gcc
 CFLAGS=-Wall -g
 LFLAGS= -pthread
-DFILES= dsm_sessiond.c dsm_htab.c dsm_inet.c dsm_msg.c dsm_util.c dsm_poll.c
+DFILES= dsm_daemon.c dsm_htab.c dsm_inet.c dsm_msg.c dsm_util.c dsm_poll.c
 SFILES= dsm_server.c dsm_inet.c dsm_msg.c dsm_util.c dsm_poll.c dsm_queue.c
-AFILES= dsm_interface.c dsm_interface_msg.c dsm_interface_ptab.c dsm_msg.c dsm_poll.c dsm_queue.c dsm_util.c dsm_inet.c
+AFILES= dsm_arbiter.c dsm_msg.c dsm_poll.c dsm_queue.c dsm_util.c dsm_inet.c
 # Build server daemon.
 daemon: ${DFILES}
 	${CC} ${CFLAGS} -o daemon ${DFILES} ${LFLAGS}

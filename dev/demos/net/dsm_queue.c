@@ -12,17 +12,17 @@
 */
 
 // Allocates and initializes an operation-queue.
-dsm_opqueue *initOpQueue (size_t queueSize) {
+dsm_opqueue *dsm_initOpQueue (size_t queueSize) {
 	dsm_opqueue *oq;
 
 	// Allocate opqueue.
 	if ((oq = malloc(sizeof(dsm_opqueue))) == NULL) {
-		dsm_cpanic("initOpQueue failed!", "Allocation error");
+		dsm_cpanic("dsm_initOpQueue failed!", "Allocation error");
 	}
 
 	// Set queue itself.
 	if ((oq->queue = malloc(queueSize * sizeof(int))) == NULL) {
-		dsm_cpanic("initOpQueue failed!", "Allocation error");
+		dsm_cpanic("dsm_initOpQueue failed!", "Allocation error");
 	}
 
 	// Set remaining fields.
@@ -34,7 +34,7 @@ dsm_opqueue *initOpQueue (size_t queueSize) {
 }
 
 // Free's given operation-queue.
-void freeOpQueue (dsm_opqueue *oq) {
+void dsm_freeOpQueue (dsm_opqueue *oq) {
 	if (oq == NULL) {
 		return;
 	}
@@ -43,20 +43,20 @@ void freeOpQueue (dsm_opqueue *oq) {
 }
 
 // Returns true (1) if the given operation-queue is empty.
-int isOpQueueEmpty (dsm_opqueue *oq) {
+int dsm_isOpQueueEmpty (dsm_opqueue *oq) {
 	return (oq->head == oq->tail);
 }
 
 // Returns tail of operation-queue. Exits fatally on error.
-int getQueueTail (dsm_opqueue *oq) {
-	if (isOpQueueEmpty(oq) == 1) {
-		dsm_cpanic("getQueueTail", "Can't get tail of empty queue!");
+int dsm_getOpQueueHead (dsm_opqueue *oq) {
+	if (dsm_isOpQueueEmpty(oq) == 1) {
+		dsm_cpanic("dsm_getOpQueueHead", "Can't get tail of empty queue!");
 	}
 	return oq->queue[oq->tail];
 }
 
 // Enqueues file-descriptor in operation-queue for write. Resizes if needed.
-void enqueueOperation (int fd, dsm_opqueue *oq) {
+void dsm_enqueueOpQueue (int fd, dsm_opqueue *oq) {
 	size_t new_queueSize;
 	int i, j, *new_queue;
 
@@ -68,7 +68,7 @@ void enqueueOperation (int fd, dsm_opqueue *oq) {
 
 		// Allocate the new queue.
 		if ((new_queue = malloc(new_queueSize * sizeof(int))) == NULL) {
-			dsm_cpanic("enqueueOperation", "Couldn't resize queue");
+			dsm_cpanic("dsm_enqueueOpQueue", "Couldn't resize queue");
 		}
 
 		// Copy over the data.
@@ -93,12 +93,12 @@ void enqueueOperation (int fd, dsm_opqueue *oq) {
 }
 
 // Dequeues file-descriptor from operation queue. Panics on error.
-int dequeueOperation (dsm_opqueue *oq) {
+int dsm_dequeueOpQueue (dsm_opqueue *oq) {
 	int val;
 
 	// Error out if queue is empty.
 	if (oq->tail == oq->head) {
-		dsm_cpanic("dequeueOperation", "Can't dequeue from empty!");
+		dsm_cpanic("dsm_dequeueOpQueue", "Can't dequeue from empty!");
 	}
 
 	// Extract value, move tail up, then return value.
@@ -108,7 +108,7 @@ int dequeueOperation (dsm_opqueue *oq) {
 }
 
 // Prints the operation-queue.
-void showOpQueue (dsm_opqueue *oq) {
+void dsm_showOpQueue (dsm_opqueue *oq) {
 	printf("Operation Step = %d\n", oq->step);
 	printf("Operation Queue = [");
 	for (int i = oq->tail; i != oq->head; i = (i + 1) % oq->queueSize) {

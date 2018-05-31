@@ -46,6 +46,9 @@
 // Boolean flag indicating if program should continue polling.
 int alive = 1;
 
+// Boolean flag indicating if session has begun.
+int started;
+
 // Pollable file-descriptor set.
 pollset *pollableSet;
 
@@ -152,14 +155,47 @@ static void send_simpleMsg (int fd, dsm_msg_t type) {
  *******************************************************************************
 */
 
+// Message indicating an arbiter is ready to begin.
+static void msg_initDone (int fd, dsm_msg *mp) {
+
+	// Ensure this message isn't received after the session has started.
+	if (started == 1) {
+		dsm_cpanic("msg_initDone", "Received out of order message!");
+	}
+	
+	// If all processes are accounted for, then start.
+	if ((nproc_waiting += mp->payload.done.nproc) >= nproc) {
+
+		printf("[%d] Ready to begin!\n", getpid());
+
+		// Set global started flag to: true.
+		started = 1;
+
+		// Send start message to all arbiters.
+		send_simpleMsg(-1, MSG_WAIT_DONE);
+
+		// Reset wait barrier.
+		nproc_waiting = 0;
+	}
+}
+
 // Message requesting write access.
 static void msg_syncRequest (int fd, dsm_msg *mp) {
+	int wasEmpty = 0;
+
+	// Ensure session started.
+	if (started == 0) {
+		dsm_cpanic("msg_syncRequest", "Received out of order message!");
+	}
+
+	// Remember if the queue is empty.
+	wasEmpty = dsm_isOpQueueEmpty(opqueue);
 
 	// Queue request.
-	enqueueOperation(fd, opqueue);
+	dsm_enqueueOpQueue(fd, opqueue);
 
 	// If no other operation in progress, send stop instruction and set step.
-	if (getQueueTail(opqueue) == fd) {
+	if (wasEmpty) {
 
 		// Assert current step is STEP_READY.
 		if (opqueue->step != STEP_READY) {
@@ -177,7 +213,7 @@ static void msg_stopDone (int fd, dsm_msg *mp) {
 	dsm_msg_done data = mp->payload.done;
 
 	// Verify message is appropriate.
-	if (opqueue->step != STEP_WAITING_STOP_ACK) {
+	if (started == 0 || opqueue->step != STEP_WAITING_STOP_ACK) {
 		dsm_cpanic("msg_stopDone", "Received out of order message!");
 	}
 
@@ -186,12 +222,12 @@ static void msg_stopDone (int fd, dsm_msg *mp) {
 	if ((nproc_stopped += data.nproc) >= (nproc - 1)) {
 
 		// Ensure writer exists.
-		if (isOpQueueEmpty(opqueue)) {
+		if (dsm_isOpQueueEmpty(opqueue)) {
 			dsm_cpanic("msg_didStop", "Message to nonexistant writer!");
 		}
 
 		// Inform writer, increment step, reset stopped count.
-		send_simpleMsg(getQueueTail(opqueue), MSG_WRITE_OKAY);
+		send_simpleMsg(dsm_getOpQueueHead(opqueue), MSG_WRITE_OKAY);
 		opqueue->step = STEP_WAITING_SYNC_INFO;
 		nproc_stopped = 0;
 	}
@@ -201,12 +237,12 @@ static void msg_stopDone (int fd, dsm_msg *mp) {
 static void msg_syncInfo (int fd, dsm_msg *mp) {
 
 	// Verify message is appropriate.
-	if (opqueue->step != STEP_WAITING_SYNC_INFO) {
+	if (started == 0 || opqueue->step != STEP_WAITING_SYNC_INFO) {
 		dsm_cpanic("msg_syncStart", "Received out of order message!");
 	}
 
 	// Verify sender is current writer.
-	if (isOpQueueEmpty(opqueue) || getQueueTail(opqueue) != fd) {
+	if (dsm_isOpQueueEmpty(opqueue) || dsm_getOpQueueHead(opqueue) != fd) {
 		dsm_cpanic("msg_syncStart", "Sender is not current writer!");
 	}
 
@@ -228,7 +264,7 @@ static void msg_syncDone (int fd, dsm_msg *mp) {
 	dsm_msg_done data = mp->payload.done;
 
 	// Verify message is appropriate.
-	if (opqueue->step != STEP_WAITING_SYNC_ACK) {
+	if (started == 0 || opqueue->step != STEP_WAITING_SYNC_ACK) {
 		dsm_cpanic("msg_syncDone", "Received out of order message!");
 	}
 	
@@ -238,16 +274,16 @@ static void msg_syncDone (int fd, dsm_msg *mp) {
 	if ((nproc_synced += data.nproc) >= (nproc - 1)) {
 
 		// Dequeue completed write-operation.
-		dequeueOperation(opqueue);
+		dsm_dequeueOpQueue(opqueue);
 
 		// Reset counter.
 		nproc_synced = 0;
 
 		// Check if another write is pending. Go to step 2. Inform writer.
-		if (!isOpQueueEmpty(opqueue)) {
+		if (!dsm_isOpQueueEmpty(opqueue)) {
 			printf("[%d] Another operation is waiting, doing it next!\n", getpid());
 			opqueue->step = STEP_WAITING_SYNC_INFO;
-			send_simpleMsg(getQueueTail(opqueue), MSG_WRITE_OKAY);
+			send_simpleMsg(dsm_getOpQueueHead(opqueue), MSG_WRITE_OKAY);
 			return;
 		}
 
@@ -265,7 +301,10 @@ static void msg_syncDone (int fd, dsm_msg *mp) {
 static void msg_waitBarr (int fd, dsm_msg *mp) {
 	dsm_msg_barr data = mp->payload.barr;
 
-	// Verify that sender isn't also currently writing (unable).
+	// Verify session has started.
+	if (started == 0) {
+		dsm_cpanic("msg_waitBarr", "Received out of order message!");
+	}
 
 	// If all processes are waiting, release and reset barrier.
 	if ((nproc_waiting += data.nproc) >= nproc) {
@@ -282,6 +321,11 @@ static void msg_waitBarr (int fd, dsm_msg *mp) {
 
 // Message indicating arbiter is exiting.
 static void msg_prgmDone (int fd, dsm_msg *mp) {
+
+	// Verify session has started.
+	if (started == 0) {
+		dsm_cpanic("msg_prgmDone", "Received ut of order message!");
+	}
 
 	// Close connection, remove from pollable set.
 	dsm_removePollable(fd, pollableSet);
@@ -424,7 +468,8 @@ int main (int argc, const char *argv[]) {
 	withDaemon = parseArgs(argc, argv, &sid, &addr, &port, &nproc);
 
 	// Set functions.
-	if (dsm_setMsgFunc(MSG_SYNC_REQ, msg_syncRequest, fmap) != 0 ||
+	if (dsm_setMsgFunc(MSG_INIT_DONE, msg_initDone, fmap) != 0 ||
+		dsm_setMsgFunc(MSG_SYNC_REQ, msg_syncRequest, fmap) != 0 ||
 		dsm_setMsgFunc(MSG_STOP_DONE, msg_stopDone, fmap) != 0 ||
 		dsm_setMsgFunc(MSG_SYNC_INFO, msg_syncInfo, fmap) != 0 ||
 		dsm_setMsgFunc(MSG_SYNC_DONE, msg_syncDone, fmap) != 0 ||
@@ -437,7 +482,7 @@ int main (int argc, const char *argv[]) {
 	pollableSet = dsm_initPollSet(DSM_MIN_POLLABLE);
 
 	// Initialize operation-queue.
-	opqueue = initOpQueue(DSM_MIN_OPQUEUE_SIZE);
+	opqueue = dsm_initOpQueue(DSM_MIN_OPQUEUE_SIZE);
 
 	// Setup listener socket: Any port.
 	sock_listen = dsm_getBoundSocket(AI_PASSIVE, AF_UNSPEC, SOCK_STREAM, "0");
@@ -487,7 +532,7 @@ int main (int argc, const char *argv[]) {
 
 		printf("[%d] Server State Change:\n", getpid());
 		dsm_showPollable(pollableSet);
-		showOpQueue(opqueue);
+		dsm_showOpQueue(opqueue);
 		printf("================================================\n");
 		putchar('\n');
 	}
@@ -509,7 +554,7 @@ int main (int argc, const char *argv[]) {
 	close(sock_listen);
 
 	// Free operation-queue.
-	freeOpQueue(opqueue);
+	dsm_freeOpQueue(opqueue);
 
 	// Free pollable set.
 	dsm_freePollSet(pollableSet);

@@ -13,7 +13,7 @@
 #include <sys/wait.h>
 #include <signal.h>
 
-#include "dsm_sessiond.h"
+#include "dsm_daemon.h"
 #include "dsm_msg.h"
 #include "dsm_htab.h"
 #include "dsm_inet.h"
