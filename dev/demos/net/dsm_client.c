@@ -147,13 +147,14 @@ unsigned int getInput (void) {
 }
 
 int main (int argc, const char *argv[]) {
-	const char *server_addr = "127.0.0.1";
-	const char *server_port;
+	const char *server_addr = NULL;
+	const char *server_port = NULL;
 
-	if (argc != 2) {
-		printf("Usage: ./client <port>\n");
+	if (argc != 3) {
+		printf("Usage: ./client <address> <port>\n");
 		exit(EXIT_FAILURE);
 	} else {
+		server_addr = *(++argv);
 		server_port = *(++argv);
 	}
 
