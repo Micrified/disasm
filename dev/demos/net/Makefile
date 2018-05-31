@@ -4,6 +4,7 @@ LFLAGS= -pthread
 DFILES= dsm_daemon.c dsm_htab.c dsm_inet.c dsm_msg.c dsm_util.c dsm_poll.c
 SFILES= dsm_server.c dsm_inet.c dsm_msg.c dsm_util.c dsm_poll.c dsm_queue.c
 AFILES= dsm_arbiter.c dsm_msg.c dsm_poll.c dsm_queue.c dsm_util.c dsm_inet.c
+TFILES= dsm_client.c dsm_inet.c dsm_msg.c dsm_util.c
 # Build server daemon.
 daemon: ${DFILES}
 	${CC} ${CFLAGS} -o daemon ${DFILES} ${LFLAGS}
@@ -15,6 +16,10 @@ server: ${SFILES}
 # Build the arbiter.
 arbiter: ${AFILES}
 	${CC} ${CFLAGS} -o arbiter ${AFILES} ${LFLAGS}
+
+# Build the tester.
+tester: ${TFILES}
+	${CC} ${CFLAGS} -o tester ${TFILES} ${LFLAGS}
 
 # Clean up.
 clean:
