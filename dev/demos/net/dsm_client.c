@@ -29,8 +29,9 @@ void configMsg (int i, dsm_msg *mp) {
 	memset(mp, 0, sizeof(*mp));
 	switch (i) {
 		case 0: {
-			mp->type = MSG_INIT_DONE;
-			mp->payload.done.nproc = 1;
+			mp->type = MSG_SET_GID;
+			mp->payload.proc.pid = 3432;
+			mp->payload.proc.gid = -1;
 			break;
 		}
 		case 1: {
@@ -76,6 +77,7 @@ void configMsg (int i, dsm_msg *mp) {
 			mp->type = MSG_ADD_PROC;
 			printf("PID: ");
 			scanf("%d", &(mp->payload.proc.pid));
+			mp->payload.proc.gid = -1;
 			break;
 		}
 		default: {
@@ -124,7 +126,7 @@ unsigned int getInput (void) {
 	do {
 		printf("Select the message to send:\n");
 		printf(" :: PROCESS <-> ARBITER <-> SERVER ::\n");
-		printf("0 - MSG_INIT_DONE: Arbiter is ready to begin.\n");
+		printf("0 - MSG_SET_GID: Set process global ID.\n");
 		printf("1 - MSG_SYNC_REQ: (Arbiter/Process) wants to write.\n");
 		printf("2 - MST_STOP_DONE: Arbiter has stopped all processes.\n");
 		printf("3 - MSG_SYNC_DONE: Arbiter has received all update data.\n");
@@ -139,7 +141,7 @@ unsigned int getInput (void) {
 		
 		putchar('\n');
 
-		printf(" :: PROCESS -> ARBITER ::\n");
+		printf(" :: PROCESS -> ARBITER -> Server ::\n");
 		printf("8 - MSG_ADD_PROC: Add process with pid to arbiter.\n");
 		
 		putchar('\n');

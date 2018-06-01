@@ -55,6 +55,12 @@ void dsm_showMsg(dsm_msg *mp) {
 			printf("SID: \"%s\"\n", mp->payload.del.sid);
 			break;
 		}
+		case MSG_SET_GID: {
+			printf("TYPE: MSG_SET_GID\n");
+			printf("PID: %d\n", mp->payload.proc.pid);
+			printf("GID: %d\n", mp->payload.proc.gid);
+			break;
+		}
 		case MSG_STOP_ALL: {
 			printf("TYPE: MSG_STOP_ALL\n");
 			break;
@@ -69,11 +75,6 @@ void dsm_showMsg(dsm_msg *mp) {
 		}
 		case MSG_WRITE_OKAY: {
 			printf("TYPE: MSG_WRITE_OKAY\n");
-			break;
-		}
-		case MSG_INIT_DONE: {
-			printf("TYPE: MSG_INIT_DONE\n");
-			printf("NPROC: %u\n", mp->payload.done.nproc);
 			break;
 		}
 		case MSG_SYNC_REQ: {

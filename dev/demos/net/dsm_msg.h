@@ -21,20 +21,19 @@ typedef enum {
 	MSG_SET_SESSION,					// [S->D] Update as session owner.
 	MSG_DEL_SESSION,					// [S->D] Request session deletion.
 
+	MSG_SET_GID,						// [S->A] Arbiter must set process gid.
 	MSG_STOP_ALL,						// [S->A] Arbiter must suspend proc's.
 	MSG_CONT_ALL,						// [S->A] Arbiter may resume proc's.
 	MSG_WAIT_DONE,						// [S->A] Arbiter can release barrier.
 	MSG_WRITE_OKAY,						// [S->A] Arbiter may write.
 
-	MSG_INIT_DONE,						// [A->S] Arbiter is ready to start.
+	MSG_ADD_PROC,						// [P->A->S] Register new process.
 	MSG_SYNC_REQ,						// [A->S] Arbiter asks for write perms.
 	MSG_SYNC_INFO,						// [A->S] Arbiter synchronization info.
 	MSG_STOP_DONE,						// [A->S] Confirms all proc's paused.
 	MSG_SYNC_DONE,						// [A->S] Confirms received all data.
 	MSG_WAIT_BARR,						// [A->S] Arbiter is waiting on barrier.
 	MSG_PRGM_DONE,						// [A->S] Arbiter is exiting.
-
-	MSG_ADD_PROC,						// [P->A] Arbiter adds a process.
 
 	MSG_MAX_VALUE
 } dsm_msg_t;
@@ -72,9 +71,10 @@ typedef struct dsm_msg_done {
 // MSG_WAIT_BARR: Reached barrier message.
 typedef dsm_msg_done dsm_msg_barr;
 
-// MSG_ADD_PROC: Add a process to an arbiter.
+// MSG_ADD_PROC + MSG_SET_GID: Send process information.
 typedef struct dsm_msg_proc {
-	int pid;
+	int pid;							// Process ID.
+	int gid;							// Global process ID.
 } dsm_msg_proc;
 
 // UNION: Aggregate describing various message payloads.

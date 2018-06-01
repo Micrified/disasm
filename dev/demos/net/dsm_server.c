@@ -49,6 +49,9 @@ int alive = 1;
 // Boolean flag indicating if session has begun.
 int started;
 
+// The global process counter.
+int gid;
+
 // Pollable file-descriptor set.
 pollset *pollableSet;
 
@@ -167,27 +170,30 @@ static void send_simpleMsg (int fd, dsm_msg_t type) {
  *******************************************************************************
 */
 
-
-// Message indicating an arbiter is ready to begin.
-static void msg_initDone (int fd, dsm_msg *mp) {
+// Message from arbiter registering a process.
+static void msg_addProc (int fd, dsm_msg *mp) {
 
 	// Ensure this message isn't received after the session has started.
 	if (started == 1) {
-		dsm_cpanic("msg_initDone", "Received out of order message!");
+		dsm_cpanic("msg_addProc", "Received out of order message!");
 	}
-	
+
+	// Send a reply with the process global ID.
+	mp->type = MSG_SET_GID;
+	mp->payload.proc.gid = gid++;
+	dsm_sendall(fd, mp, sizeof(*mp));
+
 	// If all processes are accounted for, then start.
-	if ((nproc_waiting += mp->payload.done.nproc) >= nproc) {
-
-		printf("[%d] Ready to begin!\n", getpid());
-
+	if ((nproc_waiting += 1) >= nproc) {
+		printf("[%d] STARTING!\n", getpid());
+	
 		// Set global started flag to: true.
 		started = 1;
-
+		
 		// Send start message to all arbiters.
 		send_simpleMsg(-1, MSG_WAIT_DONE);
 
-		// Reset wait barrier.
+		// Reset the barrier.
 		nproc_waiting = 0;
 	}
 }
@@ -495,7 +501,7 @@ int main (int argc, const char *argv[]) {
 	withDaemon = parseArgs(argc, argv, &sid, &addr, &port, &nproc);
 
 	// Set functions.
-	if (dsm_setMsgFunc(MSG_INIT_DONE, msg_initDone, fmap) != 0 ||
+	if (dsm_setMsgFunc(MSG_ADD_PROC, msg_addProc, fmap) != 0 ||
 		dsm_setMsgFunc(MSG_SYNC_REQ, msg_syncRequest, fmap) != 0 ||
 		dsm_setMsgFunc(MSG_STOP_DONE, msg_stopDone, fmap) != 0 ||
 		dsm_setMsgFunc(MSG_SYNC_INFO, msg_syncInfo, fmap) != 0 ||

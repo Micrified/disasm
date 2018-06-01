@@ -242,6 +242,7 @@ static void registerProcess (int fd, int pid) {
 	// Insert new entry.
 	ptab.processes[fd] = (dsm_proc) {
 		.fd = fd,
+		.gid = -1,
 		.pid = pid,
 		.flags = (dsm_pstate){.is_stopped = 0, .is_waiting = 0, .is_queued = 0}
 	};
@@ -263,7 +264,7 @@ static void unregisterProcess (int fd) {
 static void showProcessTable (void) {
 	int n = 0;
 	printf("------------------------------- Process Table ---------------------------------\n");
-	printf("\tFD\t\tPID\t\tSTOP\t\tWAIT\t\tQUEUE\n");
+	printf("\tFD\tGID\tPID\tSTOP\tWAIT\tQUEUE\n");
 	for (int i = 0; i < ptab.length; i++) {
 		if (ptab.processes[i].pid == 0) {
 			continue;
@@ -273,7 +274,7 @@ static void showProcessTable (void) {
 		char s = (p.flags.is_stopped ? 'Y' : 'N');
 		char w = (p.flags.is_waiting ? 'Y' : 'N');
 		char q = (p.flags.is_queued ? 'Y' : 'N');
-		printf("\t%d\t\t%d\t\t%c\t\t%c\t\t%c\n", i, p.pid, s, w, q);
+		printf("\t%d\t%d\t%d\t%c\t%c\t%c\n", i, p.gid, p.pid, s, w, q);
 	}
 	printf(" [%d/%d slots occupied]\n", n, ptab.length);
 	printf("-------------------------------------------------------------------------------\n");
@@ -301,10 +302,44 @@ static void msg_addProc (int fd, dsm_msg *mp) {
 	// Set the waiting bit: All processes wait before beginning.
 	ptab.processes[fd].flags.is_waiting = 1;
 
-	// Inform session-server ONE more process is ready.
-	send_doneMsg(sock_server, MSG_INIT_DONE, 1);
+	// Forward registration request to the session-server.
+	dsm_sendall(sock_server, mp, sizeof(*mp));
 
 	printf("[%d] ADD_PROC: Registered new process!\n", getpid());
+}
+
+// [S->A] Message assigning a global ID to a process identified by PID.
+static void msg_setgid (int fd, dsm_msg *mp) {
+
+	// Validate: Only server may send this.
+	if (fd != sock_server) {
+		dsm_cpanic("msg_setgid", "Unauthorized message!");
+	}
+
+	// Ensure session hasn't started.
+	if (started == 1) {
+		dsm_cpanic("msg_setgid", "Received out-of-order message!");
+	}
+
+	// Search for and update process in table.
+	for (int i = 0; i < ptab.length; i++) {
+
+		// Skip non-matching processes.
+		if (ptab.processes[i].pid != mp->payload.proc.pid) {
+			continue;
+		}
+			
+		// Set the global identifier.
+		ptab.processes[i].gid = mp->payload.proc.gid;
+
+		// Forward message to relevant process.
+		dsm_sendall(ptab.processes[i].fd, mp, sizeof(*mp));
+
+		return;
+	}
+
+	// Error out: PID not in the table.
+	dsm_cpanic("msg_setgid", "Table doesn't contain PID!");
 }
 
 // [S->A] Message requesting arbiter stop all processes and send ack.
@@ -682,6 +717,7 @@ static void arbiter (
 
 	// Register functions.
 	if (dsm_setMsgFunc(MSG_ADD_PROC, msg_addProc, fmap) 	!= 0 ||
+		dsm_setMsgFunc(MSG_SET_GID, msg_setgid, fmap)		!= 0 ||
 		dsm_setMsgFunc(MSG_STOP_ALL, msg_stopAll, fmap)		!= 0 ||
 		dsm_setMsgFunc(MSG_CONT_ALL, msg_contAll, fmap) 	!= 0 ||
 		dsm_setMsgFunc(MSG_WAIT_DONE, msg_waitDone, fmap) 	!= 0 ||

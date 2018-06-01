@@ -30,6 +30,7 @@ typedef struct dsm_pstate {
 // Structure describing process entry.
 typedef struct dsm_proc {
 	int fd;											// Process socket.
+	int gid;										// Global process ID.
 	int pid;										// Process ID.
 	dsm_pstate flags;								// Process state.
 } dsm_proc;
