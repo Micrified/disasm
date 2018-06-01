@@ -36,7 +36,7 @@ dsm_msg_func dsm_getMsgFunc (dsm_msg_t type, dsm_msg_func *fmap) {
 
 // Prints the contents of a message, depending on it's type.
 void dsm_showMsg(dsm_msg *mp) {
-	printf("---- MSG ----\n");
+	printf("############# MSG #############\n");
 	switch (mp->type) {
 		case MSG_GET_SESSION: {
 			printf("TYPE: MSG_GET_SESSION\n");
@@ -74,6 +74,7 @@ void dsm_showMsg(dsm_msg *mp) {
 		case MSG_INIT_DONE: {
 			printf("TYPE: MSG_INIT_DONE\n");
 			printf("NPROC: %u\n", mp->payload.done.nproc);
+			break;
 		}
 		case MSG_SYNC_REQ: {
 			printf("TYPE: MSG_SYNC_REQ\n");
@@ -113,5 +114,5 @@ void dsm_showMsg(dsm_msg *mp) {
 			printf("TYPE: UNKNOWN\n");
 			break;
 	}
-	printf("-------------\n");
+	printf("###############################\n");
 }

@@ -76,6 +76,17 @@ int sock_listen;
 
 /*
  *******************************************************************************
+ *                            Forward Declarations                             *
+ *******************************************************************************
+*/
+
+
+// Message indicating data was received.
+static void msg_syncDone (int fd, dsm_msg *mp);
+
+
+/*
+ *******************************************************************************
  *                         Message Dispatch Functions                          *
  *******************************************************************************
 */
@@ -149,11 +160,13 @@ static void send_simpleMsg (int fd, dsm_msg_t type) {
 	}
 }
 
+
 /*
  *******************************************************************************
  *                          Message Handler Functions                          *
  *******************************************************************************
 */
+
 
 // Message indicating an arbiter is ready to begin.
 static void msg_initDone (int fd, dsm_msg *mp) {
@@ -217,9 +230,9 @@ static void msg_stopDone (int fd, dsm_msg *mp) {
 		dsm_cpanic("msg_stopDone", "Received out of order message!");
 	}
 
-	// If (n-1) processes have stopped: Inform writer, advance to next step.
-	printf("[%d] Received MSG_STOP_DONE (%d/%d needed)\n", getpid(), nproc_stopped + data.nproc, nproc - 1);
-	if ((nproc_stopped += data.nproc) >= (nproc - 1)) {
+	// If n processes have stopped: Inform writer, advance to next step.
+	printf("[%d] Received MSG_STOP_DONE (%d/%d needed)\n", getpid(), nproc_stopped + data.nproc, nproc);
+	if ((nproc_stopped += data.nproc) >= nproc) {
 
 		// Ensure writer exists.
 		if (dsm_isOpQueueEmpty(opqueue)) {
@@ -244,6 +257,20 @@ static void msg_syncInfo (int fd, dsm_msg *mp) {
 	// Verify sender is current writer.
 	if (dsm_isOpQueueEmpty(opqueue) || dsm_getOpQueueHead(opqueue) != fd) {
 		dsm_cpanic("msg_syncStart", "Sender is not current writer!");
+	}
+
+	// If there is only one arbiter, the jump to msg_syncDone.
+	if (pollableSet->fp == 2) {
+
+		// Set the step.
+		opqueue->step = STEP_WAITING_SYNC_ACK;
+
+		// Rewrite msg as syncDone. Use nproc since all proc on one arbiter.
+		mp->type = MSG_SYNC_DONE;
+		mp->payload.done.nproc = nproc;
+		
+		msg_syncDone(fd, mp);
+		return;
 	}
 
 	printf("[%d] Received MSG_SYNC_INFO! Forwarding to all others!\n", getpid());
@@ -271,7 +298,7 @@ static void msg_syncDone (int fd, dsm_msg *mp) {
 	printf("[%d] Received MSG_SYNC_DONE!\n", getpid());
 
 	// If (n-1) processes have updated. Check queue for new write, or continue.
-	if ((nproc_synced += data.nproc) >= (nproc - 1)) {
+	if ((nproc_synced += data.nproc) >= nproc) {
 
 		// Dequeue completed write-operation.
 		dsm_dequeueOpQueue(opqueue);

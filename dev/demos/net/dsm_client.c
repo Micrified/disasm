@@ -123,22 +123,31 @@ unsigned int getInput (void) {
 
 	do {
 		printf("Select the message to send:\n");
+		printf(" :: PROCESS <-> ARBITER <-> SERVER ::\n");
+		printf("0 - MSG_INIT_DONE: Arbiter is ready to begin.\n");
+		printf("1 - MSG_SYNC_REQ: (Arbiter/Process) wants to write.\n");
+		printf("2 - MST_STOP_DONE: Arbiter has stopped all processes.\n");
+		printf("3 - MSG_SYNC_DONE: Arbiter has received all update data.\n");
+		printf("4 - MSG_PRGM_DONE: (Arbiter/Process) is exiting.\n");
+		printf("5 - MSG_SYNC_INFO: (Arbiter/Process) is sending sync information.\n");
+		printf("6 - MSG_WAIT_BARR: (Arbiter/Process) is waiting on a barrier.\n");
 
-		printf("\tSERVER-REQUESTS\n");
-		printf("\t\"0\" = Initialized.\n");
-		printf("\t\"1\" = Request to write.\n");
-		printf("\t\"2\" = Have stopped.\n");
-		printf("\t\"3\" = Sync done.\n");
-		printf("\t\"4\" = Exiting.\n");
-		printf("\t\"5\" = Sync info (dummy).\n");
-		printf("\t\"6\" = Wait on barrier.\n");
+		putchar('\n');
 
-		printf("\tDAEMON-REQUESTS\n");
-		printf("\t\"7\" = Get session.\n");
-		printf("\tARBITER-REQUESTS\n");
-		printf("\t\"8\" = Add Process.\n");
-		printf("\tOTHER\n");
-		printf("\n\t\"9\" = Read Response.\n");
+		printf(" :: [ARBITER|SERVER] <-> DAEMON ::\n");
+		printf("7 - MSG_GET_SESSION: Arbiter wishes to get server connection details.\n");
+		
+		putchar('\n');
+
+		printf(" :: PROCESS -> ARBITER ::\n");
+		printf("8 - MSG_ADD_PROC: Add process with pid to arbiter.\n");
+		
+		putchar('\n');
+
+		printf(" :: OTHER ::\n");
+		printf("9 - Read a response.\n");
+		printf("-----------------------------------------------------------------\n");
+
 		printf("Input: ");
 		scanf("%u", &input);
 	} while (input > 10);
