@@ -125,6 +125,13 @@ int dsm_getSemValue (sem_t *sp) {
 	return v;
 }
 
+// Unlinks a named semaphore. Exits fatally on error.
+void dsm_unlinkNamedSem (const char *name) {
+	if (sem_unlink(name) == -1) {
+		dsm_panicf("Couldn't unlink named semaphore: \"%s\"!", name);
+	}
+}
+
 
 /*
  *******************************************************************************
@@ -163,4 +170,11 @@ void *dsm_pageAlloc (void *address, size_t size) {
 	}
 
 	return address;
+}
+
+// Unlinks a shared memory file. Exits fatally on error.
+void dsm_unlinkSharedFile (const char *name) {
+	if (shm_unlink(name) == -1) {
+		dsm_panicf("Couldn't unlink shared file: \"%s\"!", name);
+	}
 }

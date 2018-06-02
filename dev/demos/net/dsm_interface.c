@@ -1,0 +1,330 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <errno.h>
+#include <sys/stat.h>
+#include <sys/mman.h>
+#include <semaphore.h>
+
+#include "dsm_interface.h"
+#include "dsm_types.h"
+#include "dsm_inet.h"
+#include "dsm_msg.h"
+#include "dsm_arbiter.h"
+#include "dsm_util.h"
+
+/*
+ *******************************************************************************
+ *                              Global Variables                               *
+ *******************************************************************************
+*/
+
+
+// Initialization semaphore. Processes wait on this during initialization.
+sem_t *sem_start;
+
+// Shared memory pointer. Manifests as a pointer to type: dsm_shm
+dsm_smap *smap;
+
+// Process global identifier.
+static int gid = -1;
+
+// Socket for IPC to arbiter.
+static int sock_arbiter = -1;
+
+
+/*
+ *******************************************************************************
+ *                        Internal Function Definitions                        *
+ *******************************************************************************
+*/
+
+
+// Initializes a dsm_shm map at the given aligned-address. Returns pointer.
+static dsm_smap *initSharedMapAt (dsm_smap *addr, size_t size) {
+
+	// Initialize the semaphores.
+	if (sem_init(&(addr->sem_io), 1, 1) == -1 ||
+		sem_init(&(addr->sem_barrier), 1, 1) == -1) {
+		dsm_panic("Couldn't initialize semaphores!");
+	}
+
+	// Extra-check: Size of dsm_shm doesn't exceed the size of one page.
+	if (sizeof(dsm_smap) > DSM_PAGESIZE) {
+		dsm_cpanic("dsm_smap", "sizeof(dsm_smap) exceeds pagesize!");
+	}
+
+	// Set the offset: Exactly one memory page from aligned address 'addr'.
+	addr->data_off = DSM_PAGESIZE;
+
+	// Set the size: Should be > one page.
+	if (size < DSM_PAGESIZE) {
+		dsm_cpanic("initSharedMapAt", "Shared map size must be >= pagesize!");
+	} else {
+		addr->size = size;
+	}
+
+	return addr;
+}
+
+
+// Opens or creates semaphore with initial value 'val'. Returns semaphore ptr.
+static sem_t *getSem (const char *name, unsigned int val) {
+	sem_t *sp;
+
+	// Try creating exclusive semaphore. Defer EEXIST error.
+	if ((sp = sem_open(name, O_CREAT|O_EXCL|O_RDWR, S_IRUSR|S_IWUSR, val))
+		== SEM_FAILED && errno != EEXIST) {
+		dsm_panicf("Couldn't create named-semaphore: \"%s\"!", name);
+	}
+
+	// Try opening existing semaphore. Panic on error.
+	if (sp == SEM_FAILED && (sp = sem_open(name, O_RDWR)) == SEM_FAILED) {
+		dsm_panicf("Couldn't open named-semaphore: \"%s\"!", name);
+	}
+
+	return sp;
+}
+
+// Sets size of shared file. Returns given size on success. Panics on error.
+static off_t setSharedFileSize (int fd, off_t size) {
+	if (ftruncate(fd, size) == -1) {
+		dsm_panicf("Couldn't resize shared file (fd = %d)!", fd);
+	}
+	return size;
+}
+
+// Returns the size of a shared file. Panics on error.
+static off_t getSharedFileSize (int fd) {
+	struct stat sb;
+
+	if (fstat(fd, &sb) == -1) {
+		dsm_panicf("Couldn't get size of shared file (fd = %d)!", fd);
+	}
+
+	return sb.st_size;
+}
+
+// Maps shared file of given size to memory with protections. Panics on error.
+static void *mapSharedFile (int fd, size_t size, int prot) {
+	void *map;
+
+	// Let operating system select starting address: PAGE ALIGNED
+	if ((map = mmap(NULL, size, prot, MAP_SHARED, fd, 0)) == MAP_FAILED) {
+		dsm_panicf("Couldn't map shared file to memory (fd = %d)!", fd);
+	}
+
+	return map;
+}
+
+// Creates or opens a shared file. Sets owner flag, returns file-descriptor.
+static int getSharedFile (const char *name, int *is_owner) {
+	int fd, mode = S_IRUSR|S_IWUSR, owner = 0;
+
+	// Try creating exclusive file. Defer EEXIST error.
+	if ((fd = shm_open(name, O_CREAT|O_EXCL|O_RDWR, mode)) == -1 &&
+		errno != EEXIST) {
+		dsm_panicf("Couldn't created shared file \"%s\"!", name);
+	}
+
+	// Set owner flag.
+	owner = (fd != -1);
+
+	// Try opening existing file. Panic on error.
+	if (!owner && (fd = shm_open(name, O_RDWR, mode)) == -1) {
+		dsm_panicf("Couldn't open shared file \"%s\"!", name);
+	}
+
+	// Set owner pointer.
+	if (is_owner != NULL) {
+		*is_owner = owner;	
+	}
+
+	return fd;
+}
+
+
+/*
+ *******************************************************************************
+ *                              Message Functions                              *
+ *******************************************************************************
+*/
+
+
+// Sends a registration message to the given socket.
+static void send_addProc (void) {
+	dsm_msg msg;
+
+	// Configure message.
+	memset(&msg, 0, sizeof(msg));
+	msg.type = MSG_ADD_PROC;
+	msg.payload.proc.pid = getpid();
+	msg.payload.proc.gid = -1;
+
+	// Send message.
+	dsm_sendall(sock_arbiter, &msg, sizeof(msg));
+}
+
+// Reads a reply from the arbiter, and returns the message GID.
+static int recv_gid (void) {
+	dsm_msg msg;
+
+	// Receive message.
+	if (dsm_recvall(sock_arbiter, &msg, sizeof(msg)) != 0) {
+		dsm_cpanic("recv_gid", "Lost connection to arbiter!");
+	}
+
+	// Verify message.
+	if (msg.type != MSG_SET_GID || msg.payload.proc.pid != getpid()) {
+		dsm_cpanic("recv_gid", "Bad message!");
+	}
+
+	// Return the global identifier.
+	return msg.payload.proc.gid;
+}
+
+// Sends an exit message to the arbiter.
+static void send_prgmDone (void) {
+	dsm_msg msg;
+
+	// Configure message.
+	memset(&msg, 0, sizeof(msg));
+	msg.type = MSG_PRGM_DONE;
+	msg.payload.done.nproc = 1;
+	
+	// Send message.
+	dsm_sendall(sock_arbiter, &msg, sizeof(msg));
+}
+
+
+/*
+ *******************************************************************************
+ *                        External Function Definitions                        *
+ *******************************************************************************
+*/
+
+
+/* Initializes the arbiter; connects to session daemon; starts session server.
+ * - sid: The session identifer.
+ * - addr: The address of the session daemon.
+ * - port: The port of the session daemon.
+ * - nproc: The number of expected processes.
+ * This function blocks the caller until all nproc processes have connected.
+*/
+void dsm_init (const char *sid, const char *addr, const char *port, 
+	unsigned int nproc) {
+	int fd, first;
+	off_t size = 0;
+
+	// Verify state.
+	if (sock_arbiter != -1 || smap != NULL) {
+		dsm_cpanic("dsm_init", "Initializer called twice without destructor!");
+	}
+
+	// Create or open the init-semaphore.
+	sem_start = getSem(DSM_SEM_INIT_NAME, 0);
+
+	printf("[%d] sem_start created!\n", getpid());
+
+	// Create or open the shared file.
+	fd = getSharedFile(DSM_SHM_FILE_NAME, &first);
+
+	printf("[%d] shared file created!\n", getpid());
+
+	// Set or get file size.
+	if (first) {
+		size = setSharedFileSize(fd, DSM_SHM_FILE_SIZE);
+	} else {
+		size = getSharedFileSize(fd);
+	}
+
+	// Map shared file to memory.
+	smap = (dsm_smap *)mapSharedFile(fd, size, PROT_READ|PROT_WRITE);
+
+	printf("[%d] memory map created!\n", getpid());
+
+	// If first: Setup dsm_smap and protect shared page. Then fork arbiter.
+	if (first) {
+		initSharedMapAt(smap, size);
+		dsm_mprotect((void *)smap + smap->data_off, DSM_PAGESIZE, PROT_READ);
+		if (fork() == 0) {
+			arbiter(sid, nproc, addr, port);
+		}
+	}
+
+	printf("[%d] Waiting...\n", getpid());
+
+	// Wait on initialization-semaphore for release by arbiter.
+	dsm_down(sem_start);
+
+	// Connect to arbiter.
+	sock_arbiter = dsm_getConnectedSocket(DSM_LOOPBACK_ADDR, 
+		DSM_DEF_ARB_PORT);
+	
+	// Send registration-message. 
+	send_addProc();
+
+	// Read global identifier.
+	gid = recv_gid();
+
+	printf("[%d] Ready to go! (GID = %d)\n", getpid(), gid);
+
+	// Install the signal handlers.
+	// TODO.
+}
+
+/* Returns the process global identifier. Must be called after initialization. */
+int dsm_getgid (void) {
+	if (gid == -1) {
+		dsm_cpanic("dsm_getgid", "dsm_init must be called first!");
+	}
+	return gid;
+}
+
+/* Disconnects from the arbiter; unmaps shared object. */
+void dsm_exit (void) {
+
+	// Verify state.
+	if (sock_arbiter == -1 || smap == NULL) {
+		dsm_cpanic("dsm_exit", "Routine called twice or no initialization!");
+	}
+
+	// Send exit message to arbiter.
+	send_prgmDone();
+
+	// Close the socket.
+	close(sock_arbiter);
+
+	// Reset the socket.
+	sock_arbiter = -1;
+
+	// Unmap the shared file.
+	if (munmap(smap, smap->size) == -1) {
+		dsm_panic("Couldn't unmap shared file!");
+	}
+	
+	// Reset global pointer.
+	smap = NULL;
+}
+
+
+/*
+ *******************************************************************************
+ *                                    Main                                     *
+ *******************************************************************************
+*/
+
+
+int main (void) {
+	fork();
+
+	dsm_init("arethusa", "127.0.0.1", "4200", 2);
+
+	sleep(5);
+
+	dsm_exit();
+
+	return 0;
+}

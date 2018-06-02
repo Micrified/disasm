@@ -12,11 +12,17 @@
 */
 
 
+// Max macro.
 #define MAX(a,b)				((a) > (b) ? (a) : (b))
 
+// Min macro.
 #define MIN(a,b)				((a) < (b) ? (a) : (b))
 
-#define PAGESIZE				sysconf(_SC_PAGESIZE)
+// Size of system memory page.
+#define DSM_PAGESIZE			sysconf(_SC_PAGESIZE)
+
+// Loopback address.
+#define DSM_LOOPBACK_ADDR		"127.0.0.1"
 
 
 /*
@@ -55,6 +61,9 @@ void dsm_down (sem_t *sp);
 // Returns a semaphore's value. Panics on error.
 int dsm_getSemValue (sem_t *sp);
 
+// Unlinks a named semaphore. Exits fatally on error.
+void dsm_unlinkNamedSem (const char *name);
+
 
 /*
  *******************************************************************************
@@ -70,6 +79,9 @@ void dsm_mprotect (void *address, size_t size, int flags);
 
 // Allocates a page-aligned slice of memory. Exits fatally on error.
 void *dsm_pageAlloc (void *address, size_t size);
+
+// Unlinks a shared memory file. Exits fatally on error.
+void dsm_unlinkSharedFile (const char *name);
 
 
 #endif

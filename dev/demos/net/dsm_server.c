@@ -357,7 +357,7 @@ static void msg_prgmDone (int fd, dsm_msg *mp) {
 
 	// Verify session has started.
 	if (started == 0) {
-		dsm_cpanic("msg_prgmDone", "Received ut of order message!");
+		dsm_cpanic("msg_prgmDone", "Received out of order message!");
 	}
 
 	// Close connection, remove from pollable set.

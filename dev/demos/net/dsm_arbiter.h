@@ -4,42 +4,19 @@
 
 /*
  *******************************************************************************
- *                             Symbolic Constants                              *
+ *                            Function Declarations                            *
  *******************************************************************************
 */
 
 
-// Minimum size of the process table (corresponds to number of open files).
-#define DSM_MIN_NPROC			64
-
-
-/*
- *******************************************************************************
- *                              Type Definitions                               *
- *******************************************************************************
+/* Runs the arbiter routine. This function does not return. 
+ * - sid: The session identifier
+ * - nproc: The total number of expected participant processes (across network).
+ * - addr: The address of the session-daemon.
+ * - port: The port of the session-daemon.
 */
-
-
-// Bit-field enumerating possible process states.
-typedef struct dsm_pstate {
-	unsigned int is_stopped;						// Process stopped.
-	unsigned int is_waiting;						// Process at a barrier.
-	unsigned int is_queued;							// Process in writer-queue.
-} dsm_pstate;
-
-// Structure describing process entry.
-typedef struct dsm_proc {
-	int fd;											// Process socket.
-	int gid;										// Global process ID.
-	int pid;										// Process ID.
-	dsm_pstate flags;								// Process state.
-} dsm_proc;
-
-// Structure describing process table.
-typedef struct dsm_ptab {
-	unsigned int length;							// Process table length.
-	dsm_proc *processes;							// Array of pstates.
-} dsm_ptab;
+void arbiter (const char *sid, unsigned int nproc, const char *addr,
+	const char *port);
 
 
 #endif

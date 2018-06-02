@@ -4,6 +4,7 @@
 
 #include <signal.h>
 #include <unistd.h>
+#include <sys/mman.h>
 
 #include "dsm_util.h"
 #include "dsm_inet.h"
@@ -12,7 +13,7 @@
 #include "dsm_poll.h"
 
 #include "dsm_arbiter.h"
-
+#include "dsm_types.h"
 
 /*
  *******************************************************************************
@@ -26,9 +27,6 @@
 
 // Minimum number of concurrent pollable connections.
 #define DSM_MIN_POLLABLE		32
-
-// Loopback address.
-#define DSM_LOOPBACK_ADDR		"127.0.0.1"
 
 
 /*
@@ -61,6 +59,12 @@ int sock_server;
 
 // Listener-socket. Handles local processes.
 int sock_listen;
+
+// [EXTERN] Initialization semaphore. 
+extern sem_t *sem_start;
+
+// [EXTERN] Shared memory map.
+extern dsm_smap *smap;
 
 
 /*
@@ -478,7 +482,7 @@ static void msg_syncInfo (int fd, dsm_msg *mp) {
 
 	// Otherwise: Decode sync data. Prepare to receive.
 	data = mp->payload.sync;
-	printf("[%d] SYNC_INFO: Waiting for %zu bytes at %lld offset.\n", getpid(), data.size, data.offset);
+	printf("[%d] SYNC_INFO: Waiting for %zu bytes at %ld offset.\n", getpid(), data.size, data.offset);
 
 	// TODO: RECEIVE DATA HERE.
 
@@ -702,8 +706,7 @@ static void processMessage (int fd) {
  *******************************************************************************
 */
 
-
-static void arbiter (
+void arbiter (
 	const char *sid,		// Session identifier.
 	unsigned int nproc,		// Total number of expected processes.
 	const char *addr,		// Daemon address.
@@ -741,8 +744,9 @@ static void arbiter (
 	// Setup server socket.
 	sock_server = getServerSocket(sid, addr, port, nproc);
 
-	// Setup listener socket: Any port.
-	sock_listen = dsm_getBoundSocket(AI_PASSIVE, AF_UNSPEC, SOCK_STREAM, "0");
+	// Setup listener socket: Designated port.
+	sock_listen = dsm_getBoundSocket(AI_PASSIVE, AF_UNSPEC, SOCK_STREAM,
+		DSM_DEF_ARB_PORT);
 
 	// Listen on socket.
 	if (listen(sock_listen, DSM_DEF_BACKLOG) == -1) {
@@ -755,6 +759,10 @@ static void arbiter (
 	// Set server socket as pollable.
 	dsm_setPollable(sock_server, POLLIN, pollableSet);
 
+	// Up the initialization semaphore.
+	for (int i = 0; i < nproc; i++) {
+		dsm_up(sem_start);
+	}
 
 	printf("=================================== ARBITER ===================================\n");
 	printf("Listener socket: "); dsm_showSocketInfo(sock_listen);
@@ -816,7 +824,16 @@ static void arbiter (
 	// Free the process table.
 	freeProcessTable();
 
-	// <UNMAP HERE>
+	// Unmap shared memory object.
+	if (munmap(smap, smap->size) == -1) {
+		dsm_panic("Couldn't unmap shared file!");
+	}
+
+	// Unlink the shared file.
+	dsm_unlinkSharedFile(DSM_SHM_FILE_NAME);
+
+	// Unlink the initialization-semaphore.
+	dsm_unlinkNamedSem(DSM_SEM_INIT_NAME);
 
 	// Exit.
 	exit(EXIT_SUCCESS);
@@ -830,7 +847,7 @@ static void arbiter (
 */
 
 
-int main (int argc, const char *argv[]) {
-	arbiter("arethusa", 2, "127.0.0.1", "4200");
-	return 0;
-}
+//int main (int argc, const char *argv[]) {
+//	arbiter("arethusa", 2, "127.0.0.1", "4200");
+//	return 0;
+//}
