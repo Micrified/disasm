@@ -14,6 +14,8 @@
 #include "dsm_msg.h"
 #include "dsm_arbiter.h"
 #include "dsm_util.h"
+#include "dsm_signal.h"
+#include "dsm_sync.h"
 
 /*
  *******************************************************************************
@@ -32,7 +34,7 @@ dsm_smap *smap;
 static int gid = -1;
 
 // Socket for IPC to arbiter.
-static int sock_arbiter = -1;
+int sock_arbiter = -1;
 
 
 /*
@@ -185,6 +187,21 @@ static int recv_gid (void) {
 	return msg.payload.proc.gid;
 }
 
+// Reads a start message from the arbiter.
+static void recv_waitDone (void) {
+	dsm_msg msg;
+
+	// Receive message.
+	if (dsm_recvall(sock_arbiter, &msg, sizeof(msg)) != 0) {
+		dsm_cpanic("recv_waitDone", "Lost connection to arbiter!");
+	}
+
+	// Verify message.
+	if (msg.type != MSG_WAIT_DONE) {
+		dsm_cpanic("recv_waitDone", "Bad message!");
+	}
+}
+
 // Sends an exit message to the arbiter.
 static void send_prgmDone (void) {
 	dsm_msg msg;
@@ -226,12 +243,12 @@ void dsm_init (const char *sid, const char *addr, const char *port,
 	// Create or open the init-semaphore.
 	sem_start = getSem(DSM_SEM_INIT_NAME, 0);
 
-	printf("[%d] sem_start created!\n", getpid());
+	printf("[%d] sem_start created!\n", getpid()); fflush(stdout);
 
 	// Create or open the shared file.
 	fd = getSharedFile(DSM_SHM_FILE_NAME, &first);
 
-	printf("[%d] shared file created!\n", getpid());
+	printf("[%d] shared file created!\n", getpid()); fflush(stdout);
 
 	// Set or get file size.
 	if (first) {
@@ -243,18 +260,19 @@ void dsm_init (const char *sid, const char *addr, const char *port,
 	// Map shared file to memory.
 	smap = (dsm_smap *)mapSharedFile(fd, size, PROT_READ|PROT_WRITE);
 
-	printf("[%d] memory map created!\n", getpid());
+	printf("[%d] memory map created!\n", getpid()); fflush(stdout);
 
 	// If first: Setup dsm_smap and protect shared page. Then fork arbiter.
 	if (first) {
 		initSharedMapAt(smap, size);
 		dsm_mprotect((void *)smap + smap->data_off, DSM_PAGESIZE, PROT_READ);
 		if (fork() == 0) {
+			dsm_redirXterm();
 			arbiter(sid, nproc, addr, port);
 		}
 	}
 
-	printf("[%d] Waiting...\n", getpid());
+	printf("[%d] Waiting...\n", getpid()); fflush(stdout);
 
 	// Wait on initialization-semaphore for release by arbiter.
 	dsm_down(sem_start);
@@ -269,10 +287,19 @@ void dsm_init (const char *sid, const char *addr, const char *port,
 	// Read global identifier.
 	gid = recv_gid();
 
-	printf("[%d] Ready to go! (GID = %d)\n", getpid(), gid);
+	printf("[%d] Ready to go! (GID = %d)\n", getpid(), gid); fflush(stdout);
+
+	// Initialize decoder.
+	dsm_sync_init();
 
 	// Install the signal handlers.
-	// TODO.
+	dsm_sigaction(SIGSEGV, dsm_sync_sigsegv);
+	dsm_sigaction(SIGILL, dsm_sync_sigill);
+	dsm_sigaction(SIGCONT, dsm_sync_sigcont);
+	dsm_sigaction(SIGTSTP, dsm_sync_sigtstp);
+
+	// Block until start message is received.
+	recv_waitDone();
 }
 
 /* Returns the process global identifier. Must be called after initialization. */
@@ -307,6 +334,12 @@ void dsm_exit (void) {
 	
 	// Reset global pointer.
 	smap = NULL;
+
+	// Reset the signal handlers.
+	dsm_sigdefault(SIGSEGV);
+	dsm_sigdefault(SIGILL);
+	dsm_sigdefault(SIGCONT);
+	dsm_sigdefault(SIGTSTP);
 }
 
 
@@ -318,11 +351,14 @@ void dsm_exit (void) {
 
 
 int main (void) {
-	fork();
+	int whoami = (fork() == 0) ? 1 : 0;
+
+	// Redirect output to a new terminal.
+	dsm_redirXterm();
 
 	dsm_init("arethusa", "127.0.0.1", "4200", 2);
 
-	sleep(5);
+	
 
 	dsm_exit();
 

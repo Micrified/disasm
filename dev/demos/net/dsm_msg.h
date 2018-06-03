@@ -28,8 +28,8 @@ typedef enum {
 	MSG_WRITE_OKAY,						// [S->A] Arbiter may write.
 
 	MSG_ADD_PROC,						// [P->A->S] Register new process.
-	MSG_SYNC_REQ,						// [A->S] Arbiter asks for write perms.
-	MSG_SYNC_INFO,						// [A->S] Arbiter synchronization info.
+	MSG_SYNC_REQ,						// [P->A->S] Request for write perms.
+	MSG_SYNC_INFO,						// [P->A->S] Sends sync info.
 	MSG_STOP_DONE,						// [A->S] Confirms all proc's paused.
 	MSG_SYNC_DONE,						// [A->S] Confirms received all data.
 	MSG_WAIT_BARR,						// [A->S] Arbiter is waiting on barrier.
@@ -61,6 +61,7 @@ typedef struct dsm_msg_del {
 typedef struct dsm_msg_sync {
 	off_t offset;						// Data offset.
 	size_t size;						// Data size.
+	char buf[4];						// Byte buffer [TEMP].
 } dsm_msg_sync;
 
 // MSG_SYNC_DONE + MSG_STOP_DONE: Data receival ack and stop ack.

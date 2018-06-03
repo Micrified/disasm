@@ -179,8 +179,8 @@ static void send_simpleMsg (int fd, dsm_msg_t type) {
 		return;
 	}
 
-	// Otherwise, send to all (skip listener socket at index 0).
-	for (int i = 1; i < pollableSet->fp; i++) {
+	// Otherwise, send to all (skip listener + server socket at 0 and 1).
+	for (int i = 2; i < pollableSet->fp; i++) {
 		dsm_sendall(pollableSet->fds[i].fd, &msg, sizeof(msg));
 	}
 }
@@ -282,6 +282,7 @@ static void showProcessTable (void) {
 	}
 	printf(" [%d/%d slots occupied]\n", n, ptab.length);
 	printf("-------------------------------------------------------------------------------\n");
+	fflush(stdout);
 }
 
 
@@ -309,7 +310,7 @@ static void msg_addProc (int fd, dsm_msg *mp) {
 	// Forward registration request to the session-server.
 	dsm_sendall(sock_server, mp, sizeof(*mp));
 
-	printf("[%d] ADD_PROC: Registered new process!\n", getpid());
+	printf("[%d] ADD_PROC: Registered new process!\n", getpid()); fflush(stdout);
 }
 
 // [S->A] Message assigning a global ID to a process identified by PID.
@@ -373,7 +374,7 @@ static void msg_stopAll (int fd, dsm_msg *mp) {
 		}
 	}
 
-	printf("[%d] STOP_ALL: All processes are stopped!\n", getpid());
+	printf("[%d] STOP_ALL: All processes are stopped!\n", getpid()); fflush(stdout);
 
 	// Send response: nproc = pollable - sock_listen and sock_server
 	send_doneMsg(fd, MSG_STOP_DONE, pollableSet->fp - 2);
@@ -406,7 +407,7 @@ static void msg_contAll (int fd, dsm_msg *mp) {
 		}
 	}
 
-	printf("[%d] CONT_ALL: Signalled all stopped non-writing proceses!\n", getpid());
+	printf("[%d] CONT_ALL: Signalled all stopped non-writing proceses!\n", getpid()); fflush(stdout);
 }
 
 // [S->A] Message requesting arbiter continue all waiting processes.
@@ -420,8 +421,20 @@ static void msg_waitDone (int fd, dsm_msg *mp) {
 
 	// If the session has not yet started, start the session!
 	if (started == 0) {
-		printf("[%d] WAIT_DONE: Received start signal from server!\n", getpid());
+		printf("[%d] WAIT_DONE: Received start signal from server!\n", getpid()); fflush(stdout);
 		started = 1;
+
+		// Unlink the shared file here. 
+		dsm_unlinkSharedFile(DSM_SHM_FILE_NAME);
+
+		// Unlink the initialization-semaphore here.
+		dsm_unlinkNamedSem(DSM_SEM_INIT_NAME);
+
+		// Message all processes to start.
+		send_simpleMsg(-1, MSG_WAIT_DONE);
+
+		// Return early.
+		return;
 	}
 
 	// Unset the waiting bit for all processes in the table.
@@ -442,7 +455,7 @@ static void msg_waitDone (int fd, dsm_msg *mp) {
 		}
 	}
 
-	printf("[%d] WAIT_DONE: All waiting processes signalled (unless stopped!)\n", getpid());
+	printf("[%d] WAIT_DONE: All waiting processes signalled (unless stopped!)\n", getpid()); fflush(stdout);
 }
 
 // [S->A] Message informing arbiter that a write-operation may now proceed.
@@ -470,7 +483,7 @@ static void msg_syncInfo (int fd, dsm_msg *mp) {
 
 	// If it's not from the server, forward to the server.
 	if (fd != sock_server) {
-		printf("[%d] SYNC_INFO: Forwarding syncInfo to server.\n", getpid());
+		printf("[%d] SYNC_INFO: Forwarding syncInfo to server.\n", getpid()); fflush(stdout);
 		dsm_sendall(sock_server, mp, sizeof(*mp));
 
 		// Dequeue writer and mark as not-queued.
@@ -482,9 +495,10 @@ static void msg_syncInfo (int fd, dsm_msg *mp) {
 
 	// Otherwise: Decode sync data. Prepare to receive.
 	data = mp->payload.sync;
-	printf("[%d] SYNC_INFO: Waiting for %zu bytes at %ld offset.\n", getpid(), data.size, data.offset);
+	printf("[%d] SYNC_INFO: Waiting for %zu bytes at %ld offset.\n", getpid(), data.size, data.offset); fflush(stdout);
 
-	// TODO: RECEIVE DATA HERE.
+	// HACK: Receive data here and insert it.
+	memcpy((void *)smap + smap->data_off, mp->payload.sync.buf, sizeof(int));
 
 	
 	// Send acknowledgment to server.
@@ -567,12 +581,12 @@ static void signalProcess (int fd, int signal) {
 			dsm_cpanic("signalProcess", "Specified file not in table!");
 		}
 
-		printf("[%d] BZZT! Sent signal to [%d]!\n", getpid(), ptab.processes[fd].pid);
+		printf("[%d] BZZT! Sent signal to [%d]!\n", getpid(), ptab.processes[fd].pid); fflush(stdout);
 		// Send the signal.
-		//if (kill(ptab.processes[fd].pid, signal) == -1) {
-		//	dsm_panicf("Couldn't signal process (%d)!", 
-		//		ptab.processes[fd].pid);
-		//}
+		if (kill(ptab.processes[fd].pid, signal) == -1) {
+			dsm_panicf("Couldn't signal process (%d)!", 
+				ptab.processes[fd].pid);
+		}
 
 		return;
 	}
@@ -586,11 +600,11 @@ static void signalProcess (int fd, int signal) {
 			continue;
 		}
 
-		printf("[%d] BZZT! Sent signal to [%d]!\n", getpid(), pid);
+		printf("[%d] BZZT! Sent signal to [%d]!\n", getpid(), pid); fflush(stdout);
 		// Send the signal.
-		//if (kill(pid, signal) == -1) {
-		//	dsm_panicf("Couldn't signal process (%d)!", pid);
-		//}
+		if (kill(pid, signal) == -1) {
+			dsm_panicf("Couldn't signal process (%d)!", pid);
+		}
 	}
 }
 
@@ -611,7 +625,7 @@ static int getServerSocket (const char *sid, const char *addr,
 
 	// 2. Connect to session daemon.
 	s = dsm_getConnectedSocket(addr, port);
-	printf("[%d] Connected to daemon!\n", getpid());
+	printf("[%d] Connected to daemon!\n", getpid()); fflush(stdout);
 
 	// 3. Send request.
 	dsm_sendall(s, &msg, sizeof(msg));
@@ -634,11 +648,11 @@ static int getServerSocket (const char *sid, const char *addr,
 	*/
 
 	char addrbuf[INET6_ADDRSTRLEN];
-	printf("Enter the address of the server: ");
+	printf("Enter the address of the server: "); fflush(stdout);
 	scanf("%s", addrbuf);
-	addrbuf[INET6_ADDRSTRLEN - 1] = '\0';
+	addrbuf[INET6_ADDRSTRLEN - 1] = '\0'; 
 
-	printf("Enter the port of the server: ");
+	printf("Enter the port of the server: "); fflush(stdout);
 	scanf("%u", &(msg.payload.set.port));
 	putchar('\n');
 
@@ -646,7 +660,7 @@ static int getServerSocket (const char *sid, const char *addr,
 	s = dsm_getConnectedSocket(addrbuf, 
 			dsm_portToString(msg.payload.set.port));
 
-	printf("[%d] Connected to server!\n", getpid());
+	printf("[%d] Connected to server!\n", getpid()); fflush(stdout);
 
 	// 8. Return connected socket.
 	return s; 
@@ -772,7 +786,7 @@ void arbiter (
 	dsm_showOpQueue(opqueue);
 	showProcessTable();
 	printf("===============================================================================\n");
-
+	fflush(stdout);
 
 	// ---------------------------- Main Body -----------------------------------
 
@@ -801,6 +815,7 @@ void arbiter (
 		showProcessTable();
 		putchar('\n');
 		printf("===============================================================================\n");
+		fflush(stdout);
 	}
 	
 	
@@ -828,12 +843,6 @@ void arbiter (
 	if (munmap(smap, smap->size) == -1) {
 		dsm_panic("Couldn't unmap shared file!");
 	}
-
-	// Unlink the shared file.
-	dsm_unlinkSharedFile(DSM_SHM_FILE_NAME);
-
-	// Unlink the initialization-semaphore.
-	dsm_unlinkNamedSem(DSM_SEM_INIT_NAME);
 
 	// Exit.
 	exit(EXIT_SUCCESS);

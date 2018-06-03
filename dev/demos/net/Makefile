@@ -1,11 +1,11 @@
 CC=gcc
-CFLAGS=-Wall -g
-LFLAGS= -pthread -lrt
+CFLAGS=-Wall -g -D_GNU_SOURCE
+LFLAGS= -pthread -lrt -lxed
 DFILES= dsm_daemon.c dsm_htab.c dsm_inet.c dsm_msg.c dsm_util.c dsm_poll.c
 SFILES= dsm_server.c dsm_inet.c dsm_msg.c dsm_util.c dsm_poll.c dsm_queue.c
 AFILES= dsm_arbiter.c dsm_msg.c dsm_poll.c dsm_queue.c dsm_util.c dsm_inet.c
 TFILES= dsm_client.c dsm_inet.c dsm_msg.c dsm_util.c
-IFILES= dsm_interface.c dsm_arbiter.c dsm_msg.c dsm_poll.c dsm_queue.c dsm_util.c dsm_inet.c
+IFILES= dsm_interface.c dsm_arbiter.c dsm_msg.c dsm_poll.c dsm_queue.c dsm_util.c dsm_inet.c dsm_signal.c dsm_sync.c
 
 # Build server daemon.
 daemon: ${DFILES}

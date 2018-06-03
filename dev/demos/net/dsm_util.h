@@ -44,6 +44,11 @@ void dsm_panicf (const char *fmt, ...);
 // Outputs warning to stderr.
 void dsm_warning (const char *msg);
 
+// [DEBUG] Redirects output to named file. Returns new fd.
+int dsm_setStdout (const char *filename);
+
+// [DEBUG] Redirects output to xterm window. 
+void dsm_redirXterm (void);
 
 /*
  *******************************************************************************
