@@ -15,6 +15,7 @@
 #include "dsm_poll.h"
 #include "dsm_queue.h"
 
+
 /*
  *******************************************************************************
  *                             Symbolic Constants                              *
@@ -281,11 +282,9 @@ static void msg_syncInfo (int fd, dsm_msg *mp) {
 
 	printf("[%d] Received MSG_SYNC_INFO! Forwarding to all others!\n", getpid());
 
-	// Forward to all file-descriptors except writer.
+	// Forward to all file-descriptors.
 	for (int i = 1; i < pollableSet->fp; i++) {
-		if (pollableSet->fds[i].fd != fd) {
-			dsm_sendall(pollableSet->fds[i].fd, mp, sizeof(*mp));
-		}
+		dsm_sendall(pollableSet->fds[i].fd, mp, sizeof(*mp));
 	}
 
 	// Set state to next step.

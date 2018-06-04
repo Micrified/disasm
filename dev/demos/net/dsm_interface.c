@@ -17,6 +17,7 @@
 #include "dsm_signal.h"
 #include "dsm_sync.h"
 
+
 /*
  *******************************************************************************
  *                              Global Variables                               *
@@ -392,6 +393,8 @@ void dsm_exit (void) {
 int main (void) {
 	void *page;
 
+	int whoami = (fork() == 0 ? 1 : 0);
+
 	// Call initializer.
 	dsm_init("arethusa", "127.0.0.1", "4200", 2);
 
@@ -401,8 +404,8 @@ int main (void) {
 
 	for (int i = 0; i < 5; i++) {
 
-		while (*turn != dsm_getgid());
-		if (dsm_getgid() == 0) {
+		while (*turn != whoami);
+		if (whoami == 0) {
 			printf("Ping ...\n"); fflush(stdout);
 		} else {
 			printf("... Pong\n"); fflush(stdout);
