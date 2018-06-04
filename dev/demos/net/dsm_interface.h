@@ -22,6 +22,9 @@ void dsm_init (const char *sid, const char *addr, const char *port,
 /* Returns the process global identifier. Must be called after initialization. */
 int dsm_getgid (void);
 
+/* Suspends process until all registered processes reach the barrier. */
+void dsm_barrier (void);
+
 /* Disconnects from the arbiter; unmaps shared object. */
 void dsm_exit (void);
 

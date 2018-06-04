@@ -414,27 +414,23 @@ static void msg_contAll (int fd, dsm_msg *mp) {
 static void msg_waitDone (int fd, dsm_msg *mp) {
 	dsm_proc *p;
 
+	printf("[%d] WAIT_DONE: Received!\n", getpid()); fflush(stdout);
+
 	// Validate message. Only server may send this.
 	if (fd != sock_server) {
-		dsm_cpanic("msg_waitDone", "Unauthorized message!");
+		dsm_cpanic("msg_waitDone", "Unauthorized message");
 	}
 
-	// If the session has not yet started, start the session!
+	// If session hasn't started. Treat this as start signal.
 	if (started == 0) {
-		printf("[%d] WAIT_DONE: Received start signal from server!\n", getpid()); fflush(stdout);
-		started = 1;
+		printf("[%d] WAIT_DONE: Server sent start signal!\n", getpid());
+		fflush(stdout);
 
-		// Unlink the shared file here. 
+		// Unlink the shared file.
 		dsm_unlinkSharedFile(DSM_SHM_FILE_NAME);
 
-		// Unlink the initialization-semaphore here.
+		// Unlink the initialization-semaphore.
 		dsm_unlinkNamedSem(DSM_SEM_INIT_NAME);
-
-		// Message all processes to start.
-		send_simpleMsg(-1, MSG_WAIT_DONE);
-
-		// Return early.
-		return;
 	}
 
 	// Unset the waiting bit for all processes in the table.
@@ -449,13 +445,18 @@ static void msg_waitDone (int fd, dsm_msg *mp) {
 		// Unset wait-bit.
 		p->flags.is_waiting = 0;
 
-		// Signal only if: not-stopped (shouldn't occur).
-		if (p->flags.is_stopped == 0) {
+		// Signal only if: not-stopped (shouldn't happen) and started.
+		// Why started? Because first msg_waitDone we send msg not signal.
+		if (p->flags.is_stopped == 0 && started == 1) {
 			signalProcess(i, SIGCONT);
 		}
 	}
 
-	printf("[%d] WAIT_DONE: All waiting processes signalled (unless stopped!)\n", getpid()); fflush(stdout);
+	// If session hadn't started, set started now and message all processes.
+	if (started == 0) {
+		send_simpleMsg(-1, MSG_WAIT_DONE);
+		started = 1;
+	}
 }
 
 // [S->A] Message informing arbiter that a write-operation may now proceed.
@@ -533,6 +534,8 @@ static void msg_waitBarr (int fd, dsm_msg *mp) {
 		dsm_cpanic("msg_waitBarr", "Unauthorized barrier message!");
 	}
 
+	printf("[%d] WAIT_BARR received!\n", getpid()); fflush(stdout);
+
 	// Mark process as waiting.
 	ptab.processes[fd].flags.is_waiting = 1;
 
@@ -548,6 +551,8 @@ static void msg_prgmDone (int fd, dsm_msg *mp) {
 		dsm_cpanic("msg_prgmDone", "Unauthorized termination message!");
 	}
 
+	printf("[%d] PRGM_DONE received!\n", getpid()); fflush(stdout);
+
 	// Close connection and remove from pollable set.
 	close(fd);
 	dsm_removePollable(fd, pollableSet);
@@ -556,7 +561,7 @@ static void msg_prgmDone (int fd, dsm_msg *mp) {
 	unregisterProcess(fd);
 
 	// If no more connections remain, set the termination flag.
-	if (pollableSet->fp <= 2) {
+	if (pollableSet->fp < 3) {
 		alive = 0;
 	}
 }

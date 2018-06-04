@@ -112,9 +112,9 @@ int dsm_setStdout (const char *filename) {
 	return dup(fd);
 }
 
-// [DEBUG] Redirects output to xterm window. 
-void dsm_redirXterm (void) {
-	int fd, fds[2];
+// [DEBUG] Redirects output to xterm window. Returns old stdout. 
+int dsm_redirXterm (void) {
+	int old_fd = -1, p, fds[2];
 	char buf[16];
 
 	// Create/open a pipe.
@@ -123,12 +123,12 @@ void dsm_redirXterm (void) {
 	}
 
 	// Fork. Check for error.
-	if ((fd = fork()) == -1) {
+	if ((p = fork()) == -1) {
 		dsm_panic("Couldn't fork!");
 	}
 
 	// If child process: Replace STDIN with reading end.
-	if (fd == 0) {
+	if (p == 0) {
 
 		// Close writing end of the pipe.
 		if(close(fds[1]) == -1) {
@@ -151,12 +151,19 @@ void dsm_redirXterm (void) {
 			dsm_panic("Couldn't close pipe!");
 		}
 
+		// Copy stdout.
+		if ((old_fd = dup(STDOUT_FILENO)) == -1) {
+			dsm_panic("Couldn't dup STDOUT!");
+		}
+
 		// Replace STDOUT with writing end.
 		if (close(STDOUT_FILENO) == -1 || dup(fds[1]) == -1) {
 			dsm_panic("Error replacing STDOUT!");
 		}
 
-	}	
+	}
+
+	return old_fd;
 }
 
 

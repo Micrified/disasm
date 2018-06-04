@@ -69,9 +69,6 @@ typedef struct dsm_msg_done {
 	unsigned int nproc;
 } dsm_msg_done;
 
-// MSG_WAIT_BARR: Reached barrier message.
-typedef dsm_msg_done dsm_msg_barr;
-
 // MSG_ADD_PROC + MSG_SET_GID: Send process information.
 typedef struct dsm_msg_proc {
 	int pid;							// Process ID.
@@ -85,7 +82,6 @@ typedef union dsm_msg_payload {
 	dsm_msg_del del;
 	dsm_msg_sync sync;
 	dsm_msg_done done;
-	dsm_msg_barr barr;
 	dsm_msg_proc proc;
 } dsm_msg_payload;
 

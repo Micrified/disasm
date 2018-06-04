@@ -47,8 +47,8 @@ void dsm_warning (const char *msg);
 // [DEBUG] Redirects output to named file. Returns new fd.
 int dsm_setStdout (const char *filename);
 
-// [DEBUG] Redirects output to xterm window. 
-void dsm_redirXterm (void);
+// [DEBUG] Redirects output to xterm window. Returns old stdout.
+int dsm_redirXterm (void);
 
 /*
  *******************************************************************************

@@ -332,7 +332,6 @@ static void msg_syncDone (int fd, dsm_msg *mp) {
 
 // Message indicating arbiter is waiting on a barrier.
 static void msg_waitBarr (int fd, dsm_msg *mp) {
-	dsm_msg_barr data = mp->payload.barr;
 
 	// Verify session has started.
 	if (started == 0) {
@@ -340,7 +339,7 @@ static void msg_waitBarr (int fd, dsm_msg *mp) {
 	}
 
 	// If all processes are waiting, release and reset barrier.
-	if ((nproc_waiting += data.nproc) >= nproc) {
+	if ((nproc_waiting += 1) >= nproc) {
 
 		printf("[%d] Releasing barrier!\n", getpid());
 

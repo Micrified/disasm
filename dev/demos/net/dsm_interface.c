@@ -36,6 +36,8 @@ static int gid = -1;
 // Socket for IPC to arbiter.
 int sock_arbiter = -1;
 
+// [DEBUG] Temporary holder of STDOUT fd.
+int stdout_fd;
 
 /*
  *******************************************************************************
@@ -202,6 +204,18 @@ static void recv_waitDone (void) {
 	}
 }
 
+// Informs arbiter that process is waiting on a barrier.
+static void send_waitBarr (void) {
+	dsm_msg msg;
+
+	// Configure message.
+	memset(&msg, 0, sizeof(msg));
+	msg.type = MSG_WAIT_BARR;
+
+	// Send message.
+	dsm_sendall(sock_arbiter, &msg, sizeof(msg));
+}
+
 // Sends an exit message to the arbiter.
 static void send_prgmDone (void) {
 	dsm_msg msg;
@@ -267,7 +281,8 @@ void dsm_init (const char *sid, const char *addr, const char *port,
 		initSharedMapAt(smap, size);
 		dsm_mprotect((void *)smap + smap->data_off, DSM_PAGESIZE, PROT_READ);
 		if (fork() == 0) {
-			dsm_redirXterm();
+			close(STDOUT_FILENO);
+			dup(stdout_fd);
 			arbiter(sid, nproc, addr, port);
 		}
 	}
@@ -295,8 +310,8 @@ void dsm_init (const char *sid, const char *addr, const char *port,
 	// Install the signal handlers.
 	dsm_sigaction(SIGSEGV, dsm_sync_sigsegv);
 	dsm_sigaction(SIGILL, dsm_sync_sigill);
-	dsm_sigaction(SIGCONT, dsm_sync_sigcont);
-	dsm_sigaction(SIGTSTP, dsm_sync_sigtstp);
+	//dsm_sigaction(SIGCONT, dsm_sync_sigcont);
+	//dsm_sigaction(SIGTSTP, dsm_sync_sigtstp);
 
 	// Block until start message is received.
 	recv_waitDone();
@@ -308,6 +323,14 @@ int dsm_getgid (void) {
 		dsm_cpanic("dsm_getgid", "dsm_init must be called first!");
 	}
 	return gid;
+}
+
+/* Suspends process until all registered processes reach the barrier. */
+void dsm_barrier (void) {
+	send_waitBarr();
+	if (kill(getpid(), SIGTSTP) == -1) {
+		dsm_panic("Couldn't suspend process!");
+	}
 }
 
 /* Disconnects from the arbiter; unmaps shared object. */
@@ -351,16 +374,35 @@ void dsm_exit (void) {
 
 
 int main (void) {
+
+	// Get identity.
 	int whoami = (fork() == 0) ? 1 : 0;
 
 	// Redirect output to a new terminal.
-	dsm_redirXterm();
+	stdout_fd = dsm_redirXterm();
 
+	// Call initializer.
 	dsm_init("arethusa", "127.0.0.1", "4200", 2);
 
-	
+	if (whoami == 1) {
+		printf("[%d] Sleeping...\n", getpid()); fflush(stdout);
+		sleep(5);
+	}
+
+	dsm_barrier();
+
+	if (whoami == 0) {
+		printf("[%d] Sleeping...\n", getpid()); fflush(stdout);
+		sleep(5);
+	}
+
+	dsm_barrier();
+
+	printf("[%d] Exiting!\n", getpid());
 
 	dsm_exit();
 
 	return 0;
 }
+
+

@@ -99,7 +99,6 @@ void dsm_showMsg(dsm_msg *mp) {
 		}
 		case MSG_WAIT_BARR: {
 			printf("TYPE: MSG_WAIT_BARR\n");
-			printf("NPROC: %u\n", mp->payload.barr.nproc);
 			break;
 		}
 		case MSG_PRGM_DONE: {
