@@ -72,19 +72,23 @@ static xed_uint_t getInstLength (void *addr, xed_state_t *decoderState) {
 static void takeAccess (void) {
 	dsm_msg msg;
 
+	printf("[%d] About to grab semaphore!\n", getpid()); fflush(stdout);
+
 	// Seize the I/O semaphore.
-	dsm_down(&(smap->sem_io));
+	//dsm_down(&(smap->sem_io));
+
+	printf("[%d] Grabbed semaphore!\n", getpid()); fflush(stdout);
 
 	// Configure message, and send to arbiter.
 	memset(&msg, 0, sizeof(msg));
 	msg.type = MSG_SYNC_REQ;
 	
-	printf("[%d] Sent write request!\n", getpid());
+	printf("[%d] Sent write request!\n", getpid()); fflush(stdout);
 	dsm_sendall(sock_arbiter, &msg, sizeof(msg));
 
 	// Wait for acknowledgement.
 	dsm_recvall(sock_arbiter, &msg, sizeof(msg));
-	printf("[%d] Received go-ahead!\n", getpid());
+	printf("[%d] Received go-ahead!\n", getpid()); fflush(stdout);
 
 	// Verify acknowledgement.
 	if (msg.type != MSG_WRITE_OKAY) {
@@ -97,18 +101,18 @@ static void dropAccess (void) {
 	dsm_msg msg;
 	
 	// Release the I/O semaphore.
-	dsm_up(&(smap->sem_io));
+	//dsm_up(&(smap->sem_io));
 
 	// Configure synchronization information message.
 	memset(&msg, 0, sizeof(msg));
 	msg.type = MSG_SYNC_INFO;
 	msg.payload.sync.offset = fault_addr - ((void *)smap + smap->data_off);
 	msg.payload.sync.size = 4;
-	memcpy(msg.payload.sync.buf, fault_addr, 4);
+	memcpy(msg.payload.sync.buf, fault_addr, sizeof(int));
 
 	// Send synchronization information to arbiter.
 	dsm_sendall(sock_arbiter, &msg, sizeof(msg));
-	printf("[%d] Sent sync info!\n", getpid());
+	printf("[%d] Sent sync info!\n", getpid()); fflush(stdout);
 
 	// Schedule a suspend signal
 	if (kill(getpid(), SIGTSTP) == -1) {
@@ -140,6 +144,8 @@ void dsm_sync_sigsegv (int signal, siginfo_t *info, void *ucontext) {
 	ucontext_t *context = (ucontext_t *)ucontext;
 	void *prgm_counter = (void *)context->uc_mcontext.gregs[REG_RIP];
 	xed_uint_t len;
+
+	printf("[%d] SIGSEGV!\n", getpid());
 
 	// Grab semaphore and request write access.
 	takeAccess();

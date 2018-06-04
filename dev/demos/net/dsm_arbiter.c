@@ -472,7 +472,7 @@ static void msg_writeOkay (int fd, dsm_msg *mp) {
 		dsm_cpanic("msg_writeOkay", "No writer queued!");
 	}
 
-	printf("[%d] WRITE_OKAY: Received and forwarding!\n", getpid());
+	printf("[%d] WRITE_OKAY: Received and forwarding!\n", getpid()); fflush(stdout);
 	
 	// Forward message to writer.
 	dsm_sendall(dsm_getOpQueueHead(opqueue), mp, sizeof(*mp));
@@ -496,15 +496,17 @@ static void msg_syncInfo (int fd, dsm_msg *mp) {
 
 	// Otherwise: Decode sync data. Prepare to receive.
 	data = mp->payload.sync;
-	printf("[%d] SYNC_INFO: Waiting for %zu bytes at %ld offset.\n", getpid(), data.size, data.offset); fflush(stdout);
+	printf("[%d] SYNC_INFO: Waiting for %zu bytes at %ld offset.\n", getpid(), data.size, data.offset);
+	fflush(stdout);
 
 	// HACK: Receive data here and insert it.
+	dsm_mprotect((void *)smap + smap->data_off, DSM_PAGESIZE, PROT_WRITE);
 	memcpy((void *)smap + smap->data_off, mp->payload.sync.buf, sizeof(int));
-
+	dsm_mprotect((void *)smap + smap->data_off, DSM_PAGESIZE, PROT_READ);
 	
 	// Send acknowledgment to server.
 	send_doneMsg(sock_server, MSG_SYNC_DONE, pollableSet->fp - 2);
-	printf("[%d] SYNC_INFO: Sending receival ack!\n", getpid());
+	printf("[%d] SYNC_INFO: Sending receival ack!\n", getpid()); fflush(stdout);
 }
 
 // [P->A] Message from process requesting write-access.
@@ -814,13 +816,13 @@ void arbiter (
 			processMessage(pfd->fd);
 		}
 
-		printf("[%d] Arbiter State\n", getpid());
-		dsm_showPollable(pollableSet);
-		dsm_showOpQueue(opqueue);
-		showProcessTable();
-		putchar('\n');
-		printf("===============================================================================\n");
-		fflush(stdout);
+		//printf("[%d] Arbiter State\n", getpid());
+		//dsm_showPollable(pollableSet);
+		//dsm_showOpQueue(opqueue);
+		//showProcessTable();
+		//putchar('\n');
+		//printf("===============================================================================\n");
+		//fflush(stdout);
 	}
 	
 	
@@ -845,9 +847,9 @@ void arbiter (
 	freeProcessTable();
 
 	// Unmap shared memory object.
-	if (munmap(smap, smap->size) == -1) {
-		dsm_panic("Couldn't unmap shared file!");
-	}
+	//if (munmap(smap, smap->size) == -1) {
+	//	dsm_panic("Couldn't unmap shared file!");
+	//}
 
 	// Exit.
 	exit(EXIT_SUCCESS);

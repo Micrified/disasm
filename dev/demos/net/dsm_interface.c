@@ -120,6 +120,9 @@ static void *mapSharedFile (int fd, size_t size, int prot) {
 		dsm_panicf("Couldn't map shared file to memory (fd = %d)!", fd);
 	}
 
+	// Zero the memory.
+	memset(map, 0, size);
+
 	return map;
 }
 
@@ -279,7 +282,6 @@ void dsm_init (const char *sid, const char *addr, const char *port,
 	// If first: Setup dsm_smap and protect shared page. Then fork arbiter.
 	if (first) {
 		initSharedMapAt(smap, size);
-		dsm_mprotect((void *)smap + smap->data_off, DSM_PAGESIZE, PROT_READ);
 		if (fork() == 0) {
 			close(STDOUT_FILENO);
 			dup(stdout_fd);
@@ -313,6 +315,10 @@ void dsm_init (const char *sid, const char *addr, const char *port,
 	//dsm_sigaction(SIGCONT, dsm_sync_sigcont);
 	//dsm_sigaction(SIGTSTP, dsm_sync_sigtstp);
 
+	// Protect the shared page.
+	void *page = (void *)smap + smap->data_off;
+	dsm_mprotect(page, DSM_PAGESIZE, PROT_READ);
+
 	// Block until start message is received.
 	recv_waitDone();
 }
@@ -333,6 +339,18 @@ void dsm_barrier (void) {
 	}
 }
 
+/* Returns pointer to shared page. Returns NULL on error. */
+void *dsm_getSharedPage (void) {
+
+	// Verify state.
+	if (sock_arbiter == -1 || smap == NULL) {
+		return NULL;
+	}
+
+	// Return pointer to shared page.
+	return ((void *)smap + smap->data_off);
+}
+
 /* Disconnects from the arbiter; unmaps shared object. */
 void dsm_exit (void) {
 
@@ -351,18 +369,16 @@ void dsm_exit (void) {
 	sock_arbiter = -1;
 
 	// Unmap the shared file.
-	if (munmap(smap, smap->size) == -1) {
-		dsm_panic("Couldn't unmap shared file!");
-	}
+	//if (munmap((void *)smap, smap->size) == -1) {
+	//	dsm_panic("Couldn't unmap shared file!");
+	//}
 	
 	// Reset global pointer.
 	smap = NULL;
 
 	// Reset the signal handlers.
 	dsm_sigdefault(SIGSEGV);
-	dsm_sigdefault(SIGILL);
-	dsm_sigdefault(SIGCONT);
-	dsm_sigdefault(SIGTSTP);
+	dsm_sigdefault(SIGILL);;
 }
 
 
@@ -374,32 +390,36 @@ void dsm_exit (void) {
 
 
 int main (void) {
+	void *page;
 
 	// Get identity.
 	int whoami = (fork() == 0) ? 1 : 0;
 
 	// Redirect output to a new terminal.
-	stdout_fd = dsm_redirXterm();
+	//stdout_fd = dsm_redirXterm();
 
 	// Call initializer.
 	dsm_init("arethusa", "127.0.0.1", "4200", 2);
 
-	if (whoami == 1) {
-		printf("[%d] Sleeping...\n", getpid()); fflush(stdout);
-		sleep(5);
+	// Get shared page.
+	page = dsm_getSharedPage();
+	int *turn = (int *)page;
+
+	for (int i = 0; i < 5; i++) {
+
+		while (*turn != whoami);
+		if (whoami == 0) {
+			printf("Ping ...\n"); fflush(stdout);
+		} else {
+			printf("... Pong\n"); fflush(stdout);
+		}
+		sleep(1);
+		*turn = (1 - *turn);
 	}
 
-	dsm_barrier();
+	sleep(5);
 
-	if (whoami == 0) {
-		printf("[%d] Sleeping...\n", getpid()); fflush(stdout);
-		sleep(5);
-	}
-
-	dsm_barrier();
-
-	printf("[%d] Exiting!\n", getpid());
-
+	// Call destructor.
 	dsm_exit();
 
 	return 0;
