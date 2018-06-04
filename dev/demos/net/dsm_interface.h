@@ -25,8 +25,8 @@ int dsm_getgid (void);
 /* Suspends process until all registered processes reach the barrier. */
 void dsm_barrier (void);
 
-/* Returns pointer to shared variable. Returns NULL on error. */
-void *dsm_alloc (size_t size);
+/* Returns pointer to shared page. Returns NULL on error. */
+void *dsm_getSharedPage (void);
 
 /* Disconnects from the arbiter; unmaps shared object. */
 void dsm_exit (void);

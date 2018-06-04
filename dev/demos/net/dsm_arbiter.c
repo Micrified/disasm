@@ -491,6 +491,9 @@ static void msg_syncInfo (int fd, dsm_msg *mp) {
 		dsm_dequeueOpQueue(opqueue);
 		ptab.processes[fd].flags.is_queued = 0;
 
+		// Send acknowledgement to server.
+		send_doneMsg(sock_server, MSG_SYNC_DONE, pollableSet->fp - 2);
+
 		return;
 	}
 
