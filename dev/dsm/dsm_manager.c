@@ -341,7 +341,7 @@ int main (void) {
 		wait(NULL);
 	}
 
-	printf("[%d [%d] Master: All children have finished!\n", getpid(), getpgid(0));
+	printf("[%d] [%d] Master: All children have finished!\n", getpid(), getpgid(0));
 
 	return EXIT_SUCCESS;
 }
